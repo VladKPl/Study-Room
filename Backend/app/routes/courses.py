@@ -3,8 +3,10 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models.courses import Course, CourseStatus
+from app.models.users import UserRole
 from app.repositories.courses import CourseRepository
 from app.schemas.courses import CourseResponse
+from app.security.rbac import require_roles
 
 router = APIRouter()
 
@@ -15,20 +17,21 @@ def _get_active_course_or_404(db: Session, course_id: int) -> Course:
         Course.is_deleted.is_(False),
     ).first()
     if not course:
-        raise HTTPException(status_code=404, detail="Курс не найден")
+        raise HTTPException(status_code=404, detail="Course not found")
     return course
 
 
 @router.get("/courses", response_model=CourseResponse)
 @router.get("/products", response_model=CourseResponse, include_in_schema=False)
 def list_courses(
-    q: str = Query(None, description="Поиск по названию"),
+    q: str = Query(None, description="Search by title"),
     min_price: float = Query(None, ge=0),
     max_price: float = Query(None, ge=0),
     sort: str = Query("price_asc", pattern="^(price_asc|price_desc)$"),
     page: int = Query(1, ge=1),
     page_size: int = Query(10, ge=1, le=100),
     db: Session = Depends(get_db),
+    _: UserRole = Depends(require_roles(UserRole.STUDENT, UserRole.AUTHOR, UserRole.ADMIN)),
 ):
     data, count = CourseRepository.get_courses(
         db,
@@ -49,34 +52,50 @@ def list_courses(
 
 @router.delete("/courses/{course_id}")
 @router.delete("/products/{course_id}", include_in_schema=False)
-def soft_delete_course(course_id: int, db: Session = Depends(get_db)):
+def soft_delete_course(
+    course_id: int,
+    db: Session = Depends(get_db),
+    _: UserRole = Depends(require_roles(UserRole.AUTHOR, UserRole.ADMIN)),
+):
     course = _get_active_course_or_404(db, course_id)
     course.is_deleted = True
     db.commit()
-    return {"message": f"Курс {course_id} перемещен в корзину"}
+    return {"message": f"Course {course_id} moved to trash"}
 
 
 @router.patch("/courses/{course_id}/hide")
-def hide_course(course_id: int, db: Session = Depends(get_db)):
+def hide_course(
+    course_id: int,
+    db: Session = Depends(get_db),
+    _: UserRole = Depends(require_roles(UserRole.AUTHOR, UserRole.ADMIN)),
+):
     course = _get_active_course_or_404(db, course_id)
     course.status = CourseStatus.HIDDEN
     db.commit()
-    return {"message": "Курс скрыт автором"}
+    return {"message": "Course hidden"}
 
 
 @router.patch("/courses/{course_id}/ban")
-def ban_course(course_id: int, db: Session = Depends(get_db)):
+def ban_course(
+    course_id: int,
+    db: Session = Depends(get_db),
+    _: UserRole = Depends(require_roles(UserRole.ADMIN)),
+):
     course = _get_active_course_or_404(db, course_id)
     course.status = CourseStatus.BANNED
     db.commit()
-    return {"message": "Курс заблокирован модератором"}
+    return {"message": "Course banned"}
 
 
 @router.delete("/courses/{course_id}/hard-delete")
-def hard_delete_course(course_id: int, db: Session = Depends(get_db)):
+def hard_delete_course(
+    course_id: int,
+    db: Session = Depends(get_db),
+    _: UserRole = Depends(require_roles(UserRole.ADMIN)),
+):
     course = db.query(Course).filter(Course.id == course_id).first()
     if not course:
-        raise HTTPException(status_code=404, detail="Курс не существует")
+        raise HTTPException(status_code=404, detail="Course does not exist")
     db.delete(course)
     db.commit()
-    return {"message": "Курс полностью удален из системы"}
+    return {"message": "Course permanently deleted"}
