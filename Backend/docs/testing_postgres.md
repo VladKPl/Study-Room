@@ -24,3 +24,17 @@ pytest -q
 ```
 
 Tests automatically use `TEST_DATABASE_URL` and truncate tables between cases.
+
+## 4) Demo page
+
+Run API:
+
+```powershell
+uvicorn app.main:app --reload
+```
+
+Open:
+
+- `http://127.0.0.1:8000/demo`
+
+Use role switcher (`guest`, `student`, `author`, `admin`) to verify RBAC behaviour.

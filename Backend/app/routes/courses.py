@@ -5,7 +5,7 @@ from app.database import get_db
 from app.models.courses import Course, CourseStatus
 from app.models.users import UserRole
 from app.repositories.courses import CourseRepository
-from app.schemas.courses import CourseResponse
+from app.schemas.courses import CourseBase, CourseResponse
 from app.security.rbac import require_roles
 
 router = APIRouter()
@@ -15,6 +15,17 @@ def _get_active_course_or_404(db: Session, course_id: int) -> Course:
     course = db.query(Course).filter(
         Course.id == course_id,
         Course.is_deleted.is_(False),
+    ).first()
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    return course
+
+
+def _get_public_course_or_404(db: Session, course_id: int) -> Course:
+    course = db.query(Course).filter(
+        Course.id == course_id,
+        Course.is_deleted.is_(False),
+        Course.status == CourseStatus.PUBLISHED,
     ).first()
     if not course:
         raise HTTPException(status_code=404, detail="Course not found")
@@ -31,7 +42,9 @@ def list_courses(
     page: int = Query(1, ge=1),
     page_size: int = Query(10, ge=1, le=100),
     db: Session = Depends(get_db),
-    _: UserRole = Depends(require_roles(UserRole.STUDENT, UserRole.AUTHOR, UserRole.ADMIN)),
+    _: UserRole = Depends(
+        require_roles(UserRole.GUEST, UserRole.STUDENT, UserRole.AUTHOR, UserRole.ADMIN)
+    ),
 ):
     data, count = CourseRepository.get_courses(
         db,
@@ -48,6 +61,27 @@ def list_courses(
         "page": page,
         "page_size": page_size,
     }
+
+
+@router.get("/courses/{course_id}", response_model=CourseBase)
+def get_course_detail(
+    course_id: int,
+    db: Session = Depends(get_db),
+    _: UserRole = Depends(
+        require_roles(UserRole.GUEST, UserRole.STUDENT, UserRole.AUTHOR, UserRole.ADMIN)
+    ),
+):
+    return _get_public_course_or_404(db, course_id)
+
+
+@router.post("/courses/{course_id}/start")
+def start_course(
+    course_id: int,
+    db: Session = Depends(get_db),
+    _: UserRole = Depends(require_roles(UserRole.STUDENT, UserRole.AUTHOR, UserRole.ADMIN)),
+):
+    _get_public_course_or_404(db, course_id)
+    return {"message": f"Course {course_id} started"}
 
 
 @router.delete("/courses/{course_id}")

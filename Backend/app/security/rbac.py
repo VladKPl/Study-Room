@@ -6,7 +6,7 @@ from app.models.users import UserRole
 
 
 def get_current_role(x_role: str | None = Header(default=None, alias="X-Role")) -> UserRole:
-    raw_role = (x_role or UserRole.STUDENT.value).strip().lower()
+    raw_role = (x_role or UserRole.GUEST.value).strip().lower()
     try:
         return UserRole(raw_role)
     except ValueError as exc:

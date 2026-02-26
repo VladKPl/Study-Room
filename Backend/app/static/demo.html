@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Course API Demo</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 20px; max-width: 1080px; }
+    h1, h2 { margin: 0 0 8px; }
+    p { margin: 4px 0 10px; }
+    .card { border: 1px solid #ddd; border-radius: 8px; padding: 12px; margin-bottom: 12px; }
+    .row { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
+    .field { min-width: 120px; }
+    label { display: block; font-size: 13px; margin-bottom: 4px; }
+    input, select, button { padding: 8px; }
+    button { cursor: pointer; }
+    button[disabled] { cursor: not-allowed; opacity: 0.6; }
+    .badge { display: inline-block; padding: 4px 8px; background: #eef6ff; border-radius: 12px; }
+    .caps { margin-top: 8px; font-size: 14px; }
+    .hint { font-size: 13px; color: #444; }
+    #detail, #log { white-space: pre-wrap; background: #f7f7f7; padding: 10px; border-radius: 8px; min-height: 50px; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { border: 1px solid #ddd; padding: 8px; text-align: left; vertical-align: top; }
+    .actions { display: flex; gap: 6px; flex-wrap: wrap; }
+  </style>
+</head>
+<body>
+  <h1>Course API Demo</h1>
+  <p>Demo page for roles, list/filter, course card and protected actions.</p>
+
+  <div class="card">
+    <h2>Current Role</h2>
+    <div class="row">
+      <div class="field">
+        <label for="role">X-Role</label>
+        <select id="role" onchange="updateRoleUi()">
+          <option value="guest">guest</option>
+          <option value="student">student</option>
+          <option value="author">author</option>
+          <option value="admin">admin</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Effective role</label>
+        <span id="role_badge" class="badge">guest</span>
+      </div>
+    </div>
+    <div id="caps" class="caps"></div>
+  </div>
+
+  <div class="card">
+    <h2>List Courses</h2>
+    <div class="row">
+      <div class="field">
+        <label for="q">Query</label>
+        <input id="q" placeholder="python" />
+      </div>
+      <div class="field">
+        <label for="min_price">Min price</label>
+        <input id="min_price" type="number" min="0" />
+      </div>
+      <div class="field">
+        <label for="max_price">Max price</label>
+        <input id="max_price" type="number" min="0" />
+      </div>
+      <div class="field">
+        <label for="sort">Sort</label>
+        <select id="sort">
+          <option value="price_asc">price_asc</option>
+          <option value="price_desc">price_desc</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="page">Page</label>
+        <input id="page" type="number" min="1" value="1" />
+      </div>
+      <div class="field">
+        <label for="page_size">Page size</label>
+        <input id="page_size" type="number" min="1" max="100" value="10" />
+      </div>
+      <div class="field">
+        <label>&nbsp;</label>
+        <button onclick="listCourses()">Load</button>
+      </div>
+    </div>
+    <table>
+      <thead>
+        <tr><th>ID</th><th>Title</th><th>Price</th><th>Actions</th></tr>
+      </thead>
+      <tbody id="courses"></tbody>
+    </table>
+    <p class="hint">If list is empty, DB may have no published courses yet.</p>
+  </div>
+
+  <div class="card">
+    <h2>Course Card</h2>
+    <div class="row">
+      <div class="field">
+        <label for="course_id">Course ID</label>
+        <input id="course_id" type="number" min="1" />
+      </div>
+      <div class="field">
+        <label>&nbsp;</label>
+        <button onclick="getCourse()">View Card</button>
+      </div>
+    </div>
+    <div id="detail"></div>
+  </div>
+
+  <div class="card">
+    <h2>Actions By Course ID</h2>
+    <p class="hint">Buttons are always visible; unavailable actions are disabled by role.</p>
+    <div class="row">
+      <div class="field">
+        <label for="action_course_id">Course ID</label>
+        <input id="action_course_id" type="number" min="1" />
+      </div>
+      <div class="field"><label>&nbsp;</label><button data-action="start" onclick="runAction('start')">start</button></div>
+      <div class="field"><label>&nbsp;</label><button data-action="hide" onclick="runAction('hide')">hide course</button></div>
+      <div class="field"><label>&nbsp;</label><button data-action="ban" onclick="runAction('ban')">ban course</button></div>
+      <div class="field"><label>&nbsp;</label><button data-action="soft" onclick="runAction('soft')">soft delete course</button></div>
+      <div class="field"><label>&nbsp;</label><button data-action="hard" onclick="runAction('hard')">hard delete course</button></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Response Log</h2>
+    <div id="log"></div>
+  </div>
+
+  <script>
+    const apiBase = "/api/v1";
+    const permissions = {
+      guest:   { read: true,  start: false, hide: false, ban: false, soft: false, hard: false },
+      student: { read: true,  start: true,  hide: false, ban: false, soft: false, hard: false },
+      author:  { read: true,  start: true,  hide: true,  ban: false, soft: true,  hard: false },
+      admin:   { read: true,  start: true,  hide: true,  ban: true,  soft: true,  hard: true  }
+    };
+
+    function currentRole() {
+      return document.getElementById("role").value;
+    }
+
+    function roleHeaders() {
+      return { "X-Role": currentRole() };
+    }
+
+    function can(action) {
+      return !!permissions[currentRole()][action];
+    }
+
+    function log(status, payload) {
+      const text = typeof payload === "string" ? payload : JSON.stringify(payload, null, 2);
+      document.getElementById("log").textContent = `status: ${status}\n${text}`;
+    }
+
+    async function call(path, opts = {}) {
+      const res = await fetch(path, {
+        ...opts,
+        headers: { ...(opts.headers || {}), ...roleHeaders() }
+      });
+      let body;
+      try {
+        body = await res.json();
+      } catch (_) {
+        body = await res.text();
+      }
+      log(res.status, body);
+      return { res, body };
+    }
+
+    function updateRoleUi() {
+      const role = currentRole();
+      document.getElementById("role_badge").textContent = role;
+      document.getElementById("caps").textContent =
+        `Allowed: read=${permissions[role].read}, start=${permissions[role].start}, hide=${permissions[role].hide}, ban=${permissions[role].ban}, soft=${permissions[role].soft}, hard=${permissions[role].hard}`;
+      for (const btn of document.querySelectorAll("button[data-action]")) {
+        btn.disabled = !can(btn.dataset.action);
+      }
+      renderCourses(window.lastCourses || []);
+    }
+
+    function actionButtons(id) {
+      const buttons = ["start", "hide", "ban", "soft", "hard"];
+      const div = document.createElement("div");
+      div.className = "actions";
+      for (const type of buttons) {
+        const b = document.createElement("button");
+        b.textContent = type;
+        b.disabled = !can(type);
+        b.onclick = () => action(type, id);
+        div.appendChild(b);
+      }
+      return div;
+    }
+
+    function renderCourses(rows) {
+      window.lastCourses = rows;
+      const tbody = document.getElementById("courses");
+      tbody.innerHTML = "";
+      if (!rows.length) {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `<td colspan="4">No published courses found. Seed DB and click Load.</td>`;
+        tbody.appendChild(tr);
+        return;
+      }
+      for (const c of rows) {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `<td>${c.id}</td><td>${c.title}</td><td>${c.price}</td><td></td>`;
+        tr.children[3].appendChild(actionButtons(c.id));
+        tbody.appendChild(tr);
+      }
+    }
+
+    async function listCourses() {
+      const params = new URLSearchParams();
+      for (const field of ["q", "min_price", "max_price", "sort", "page", "page_size"]) {
+        const value = document.getElementById(field).value;
+        if (value !== "") params.set(field, value);
+      }
+      const { body } = await call(`${apiBase}/courses?${params.toString()}`);
+      renderCourses(Array.isArray(body.data) ? body.data : []);
+    }
+
+    async function getCourse() {
+      const id = document.getElementById("course_id").value;
+      if (!id) {
+        log(0, "Enter course ID");
+        return;
+      }
+      const { body } = await call(`${apiBase}/courses/${id}`);
+      document.getElementById("detail").textContent = JSON.stringify(body, null, 2);
+    }
+
+    async function action(type, courseId) {
+      if (type === "start") return call(`${apiBase}/courses/${courseId}/start`, { method: "POST" });
+      if (type === "hide") return call(`${apiBase}/courses/${courseId}/hide`, { method: "PATCH" });
+      if (type === "ban") return call(`${apiBase}/courses/${courseId}/ban`, { method: "PATCH" });
+      if (type === "soft") return call(`${apiBase}/courses/${courseId}`, { method: "DELETE" });
+      if (type === "hard") return call(`${apiBase}/courses/${courseId}/hard-delete`, { method: "DELETE" });
+    }
+
+    function runAction(type) {
+      const id = document.getElementById("action_course_id").value;
+      if (!id) {
+        log(0, "Enter course ID");
+        return;
+      }
+      action(type, id);
+    }
+
+    updateRoleUi();
+  </script>
+</body>
+</html>
