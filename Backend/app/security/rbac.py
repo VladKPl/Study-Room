@@ -28,3 +28,18 @@ def require_roles(*allowed_roles: UserRole) -> Callable[[UserRole], UserRole]:
         return current_role
 
     return dependency
+
+
+def get_current_user_id(x_user_id: str | None = Header(default=None, alias="X-User-Id")) -> int | None:
+    if x_user_id is None or x_user_id.strip() == "":
+        return None
+
+    try:
+        user_id = int(x_user_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="X-User-Id must be an integer") from exc
+
+    if user_id <= 0:
+        raise HTTPException(status_code=400, detail="X-User-Id must be greater than 0")
+
+    return user_id

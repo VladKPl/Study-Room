@@ -1,39 +1,43 @@
-# RBAC And User Stories
+# RBAC И User Story
 
-## Roles
+## Роли
 
-- `guest`: anonymous visitor, read-only access to public courses.
-- `student`: registered user, can start courses.
-- `author`: student with author privileges, can hide/soft-delete own content.
-- `admin`: full moderation access, including ban and hard delete.
+- `guest`: анонимный посетитель, доступ только на чтение публичных курсов.
+- `student`: зарегистрированный пользователь, может начинать курсы.
+- `author`: студент с правами автора, может скрывать курс и делать soft delete.
+- `admin`: полный доступ к модерации, включая ban и hard delete.
 
-## Permissions Matrix
+## Матрица прав
 
-| Action | guest | student | author | admin |
+| Действие | guest | student | author | admin |
 |---|---|---|---|---|
-| List published courses (`GET /api/v1/courses`) | yes | yes | yes | yes |
-| View course card (`GET /api/v1/courses/{id}`) | yes | yes | yes | yes |
-| Start course (`POST /api/v1/courses/{id}/start`) | no | yes | yes | yes |
-| Soft delete course (`DELETE /api/v1/courses/{id}`) | no | no | yes | yes |
-| Hide course (`PATCH /api/v1/courses/{id}/hide`) | no | no | yes | yes |
-| Ban course (`PATCH /api/v1/courses/{id}/ban`) | no | no | no | yes |
-| Hard delete course (`DELETE /api/v1/courses/{id}/hard-delete`) | no | no | no | yes |
+| Список опубликованных курсов (`GET /api/v1/courses`) | да | да | да | да |
+| Просмотр карточки курса (`GET /api/v1/courses/{id}`) | да | да | да | да |
+| Создать курс (`POST /api/v1/courses`) | нет | нет | да | да |
+| Начать курс (`POST /api/v1/courses/{id}/start`) | нет | да | да | да |
+| Soft delete курса (`DELETE /api/v1/courses/{id}`) | нет | нет | да | да |
+| Скрыть курс (`PATCH /api/v1/courses/{id}/hide`) | нет | нет | да | да |
+| Забанить курс (`PATCH /api/v1/courses/{id}/ban`) | нет | нет | нет | да |
+| Hard delete курса (`DELETE /api/v1/courses/{id}/hard-delete`) | нет | нет | нет | да |
 
-## User Stories
+## User Story
 
-1. As a `guest`, I want to search and view course cards, so that I can evaluate content before registration.
-2. As a `student`, I want to start a course, so that I can begin learning after registration.
-3. As an `author`, I want to hide my course from listing, so that I can temporarily remove it from public view.
-4. As an `author`, I want to move my course to trash (soft delete), so that I can recover it later if needed.
-5. As an `admin`, I want to ban violating courses, so that policy-breaking content is not visible.
-6. As an `admin`, I want to hard delete illegal or broken courses, so that the system remains clean.
+1. Как `guest`, я хочу искать курсы и смотреть карточки, чтобы оценить контент до регистрации.
+2. Как `student`, я хочу начинать курс, чтобы приступить к обучению после регистрации.
+3. Как `author`, я хочу создавать курсы, чтобы публиковать собственный контент.
+4. Как `author`, я хочу скрывать курс из выдачи, чтобы временно убрать его из публичного доступа.
+5. Как `author`, я хочу переносить курс в корзину (soft delete), чтобы при необходимости восстановить его.
+6. Как `admin`, я хочу банить нарушающие правила курсы, чтобы блокировать проблемный контент.
+7. Как `admin`, я хочу удалять курсы полностью (hard delete), чтобы поддерживать систему в чистом состоянии.
 
-## Planned (not implemented yet)
+## Запланировано (ещё не реализовано)
 
-- Self-upgrade `student -> author` by the authenticated user.
-- Authentication/identity layer (JWT/session) to replace header-only role simulation.
+- Самостоятельное повышение роли `student -> author` для аутентифицированного пользователя.
+- Полноценная аутентификация/идентификация (JWT/сессии) вместо ролевой симуляции через заголовок.
 
-## Technical Notes
+## Технические заметки
 
-- Current API uses header-based role simulation via `X-Role` for RBAC checks.
-- In production this must be replaced with authenticated identity (JWT/session) and ownership checks.
+- Сейчас RBAC проверяется через заголовок `X-Role`.
+- Для author-операций в текущей реализации также требуется `X-User-Id`,
+  чтобы проверять владение курсом.
+- В будущем это должно быть заменено на аутентификацию пользователя и проверки владения контентом.

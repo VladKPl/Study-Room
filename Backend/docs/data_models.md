@@ -1,70 +1,75 @@
-# Data Models
+# Описание моделей данных
 
 ## users
 
-| Field | Type | Null | Default | Constraints |
+| Поле | Тип | Null | По умолчанию | Ограничения |
 |---|---|---|---|---|
-| `id` | `Integer` | no | serial | PK, index |
-| `email` | `String` | no | - | unique, index |
-| `full_name` | `String` | no | - | - |
-| `role` | `Enum(userrole)` | no | `student` | values: `guest`, `student`, `author`, `admin` |
+| `id` | `Integer` | нет | serial | PK, index |
+| `email` | `String` | нет | - | unique, index |
+| `full_name` | `String` | нет | - | - |
+| `role` | `Enum(userrole)` | нет | `student` | значения: `guest`, `student`, `author`, `admin` |
 
-Notes:
-- Default DB role for created account is `student`.
-- Anonymous visitor role is `guest` and comes from API logic (`X-Role` fallback), not from persisted user row.
+Примечания:
+- Роль по умолчанию в БД для зарегистрированного аккаунта — `student`.
+- Роль анонимного посетителя (`guest`) берётся из логики API (`X-Role` fallback), а не из записи в таблице `users`.
 
 ## categories
 
-| Field | Type | Null | Default | Constraints |
+| Поле | Тип | Null | По умолчанию | Ограничения |
 |---|---|---|---|---|
-| `id` | `Integer` | no | serial | PK, index |
-| `name` | `String` | no | - | unique |
+| `id` | `Integer` | нет | serial | PK, index |
+| `name` | `String` | нет | - | unique |
 
 ## courses
 
-| Field | Type | Null | Default | Constraints |
+| Поле | Тип | Null | По умолчанию | Ограничения |
 |---|---|---|---|---|
-| `id` | `Integer` | no | serial | PK, index |
-| `title` | `String` | no | - | index |
-| `description` | `Text` | yes | - | - |
-| `price` | `Float` | no | - | - |
-| `status` | `Enum(coursestatus)` | no | `DRAFT` | values: `DRAFT`, `PUBLISHED`, `HIDDEN`, `BANNED` |
-| `is_deleted` | `Boolean` | no | `false` | soft delete flag |
-| `category_id` | `Integer` | yes | - | FK -> `categories.id` |
+| `id` | `Integer` | нет | serial | PK, index |
+| `title` | `String` | нет | - | index |
+| `description` | `Text` | да | - | - |
+| `price` | `Float` | нет | - | - |
+| `status` | `Enum(coursestatus)` | нет | `DRAFT` | значения: `DRAFT`, `PUBLISHED`, `HIDDEN`, `BANNED` |
+| `is_deleted` | `Boolean` | нет | `false` | флаг soft delete |
+| `category_id` | `Integer` | да | - | FK -> `categories.id` |
+| `author_id` | `Integer` | да | - | FK -> `users.id`, владелец курса |
 
-Indexes:
+Индексы:
 - `ix_courses_visible_status_price(status, is_deleted, price)`
 - `ix_courses_title`
 
 ## lessons
 
-| Field | Type | Null | Default | Constraints |
+| Поле | Тип | Null | По умолчанию | Ограничения |
 |---|---|---|---|---|
-| `id` | `Integer` | no | serial | PK, index |
-| `title` | `String` | no | - | - |
-| `video_url` | `String` | yes | - | - |
-| `course_id` | `Integer` | yes | - | FK -> `courses.id` |
+| `id` | `Integer` | нет | serial | PK, index |
+| `title` | `String` | нет | - | - |
+| `video_url` | `String` | да | - | - |
+| `course_id` | `Integer` | да | - | FK -> `courses.id` |
 
-## Relationships
+## Связи
 
 - `Category (1) -> (N) Course`
 - `Course (1) -> (N) Lesson`
+- `User (1) -> (N) Course`
 
-In ORM:
+В ORM:
 - `Category.courses` <-> `Course.category`
 - `Course.lessons` <-> `Lesson.course`
-- `Course.lessons` has cascade `all, delete-orphan`.
+- для `Course.lessons` включён каскад `all, delete-orphan`.
+- `User.courses` <-> `Course.author`
 
-## API-Level Validation
+## Валидация на уровне API
 
-- Query constraints for list endpoint:
+- Ограничения query-параметров в list endpoint:
   - `min_price >= 0`
   - `max_price >= 0`
   - `page >= 1`
   - `1 <= page_size <= 100`
-  - `sort` matches `price_asc|price_desc`
-- RBAC validation by role:
-  - `guest`: read-only
-  - `student`: can start course
-  - `author`: can mutate author-level operations
-  - `admin`: full moderation operations
+  - `sort` соответствует `price_asc|price_desc`
+- RBAC по ролям:
+  - `guest`: только чтение
+  - `student`: может начать курс
+  - `author`: может создавать курс и изменять только свои курсы
+  - `admin`: полный доступ к модерации
+- Для author-операций используется заголовок `X-User-Id`
+  (временная идентификация до внедрения полноценной аутентификации).

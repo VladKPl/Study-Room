@@ -7,17 +7,15 @@
   <style>
     body { font-family: Arial, sans-serif; margin: 20px; max-width: 1080px; }
     h1, h2 { margin: 0 0 8px; }
-    p { margin: 4px 0 10px; }
     .card { border: 1px solid #ddd; border-radius: 8px; padding: 12px; margin-bottom: 12px; }
-    .row { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
+    .row { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
     .field { min-width: 120px; }
     label { display: block; font-size: 13px; margin-bottom: 4px; }
     input, select, button { padding: 8px; }
     button { cursor: pointer; }
-    button[disabled] { cursor: not-allowed; opacity: 0.6; }
-    .badge { display: inline-block; padding: 4px 8px; background: #eef6ff; border-radius: 12px; }
-    .caps { margin-top: 8px; font-size: 14px; }
-    .hint { font-size: 13px; color: #444; }
+    button[disabled] { opacity: 0.6; cursor: not-allowed; }
+    .caps { font-size: 14px; margin-top: 8px; }
+    .hint { font-size: 13px; color: #444; margin-top: 4px; }
     #detail, #log { white-space: pre-wrap; background: #f7f7f7; padding: 10px; border-radius: 8px; min-height: 50px; }
     table { width: 100%; border-collapse: collapse; }
     th, td { border: 1px solid #ddd; padding: 8px; text-align: left; vertical-align: top; }
@@ -26,10 +24,10 @@
 </head>
 <body>
   <h1>Course API Demo</h1>
-  <p>Demo page for roles, list/filter, course card and protected actions.</p>
+  <p>Demo for RBAC and DB-backed operations.</p>
 
   <div class="card">
-    <h2>Current Role</h2>
+    <h2>Context</h2>
     <div class="row">
       <div class="field">
         <label for="role">X-Role</label>
@@ -41,28 +39,37 @@
         </select>
       </div>
       <div class="field">
-        <label>Effective role</label>
-        <span id="role_badge" class="badge">guest</span>
+        <label for="user_id">X-User-Id (for author)</label>
+        <input id="user_id" type="number" min="1" placeholder="e.g. 1" />
       </div>
     </div>
     <div id="caps" class="caps"></div>
   </div>
 
   <div class="card">
+    <h2>Create Course (author/admin)</h2>
+    <div class="row">
+      <div class="field"><label for="new_title">Title</label><input id="new_title" /></div>
+      <div class="field"><label for="new_price">Price</label><input id="new_price" type="number" min="0" /></div>
+      <div class="field"><label for="new_category_id">Category ID</label><input id="new_category_id" type="number" min="1" /></div>
+      <div class="field">
+        <label for="new_status">Status</label>
+        <select id="new_status">
+          <option value="draft">draft</option>
+          <option value="published">published</option>
+        </select>
+      </div>
+      <div class="field"><label>&nbsp;</label><button data-action="create" onclick="createCourse()">Create</button></div>
+    </div>
+    <div class="hint">Author must pass valid `X-User-Id` to create own course.</div>
+  </div>
+
+  <div class="card">
     <h2>List Courses</h2>
     <div class="row">
-      <div class="field">
-        <label for="q">Query</label>
-        <input id="q" placeholder="python" />
-      </div>
-      <div class="field">
-        <label for="min_price">Min price</label>
-        <input id="min_price" type="number" min="0" />
-      </div>
-      <div class="field">
-        <label for="max_price">Max price</label>
-        <input id="max_price" type="number" min="0" />
-      </div>
+      <div class="field"><label for="q">Query</label><input id="q" /></div>
+      <div class="field"><label for="min_price">Min price</label><input id="min_price" type="number" min="0" /></div>
+      <div class="field"><label for="max_price">Max price</label><input id="max_price" type="number" min="0" /></div>
       <div class="field">
         <label for="sort">Sort</label>
         <select id="sort">
@@ -70,56 +77,37 @@
           <option value="price_desc">price_desc</option>
         </select>
       </div>
-      <div class="field">
-        <label for="page">Page</label>
-        <input id="page" type="number" min="1" value="1" />
-      </div>
-      <div class="field">
-        <label for="page_size">Page size</label>
-        <input id="page_size" type="number" min="1" max="100" value="10" />
-      </div>
-      <div class="field">
-        <label>&nbsp;</label>
-        <button onclick="listCourses()">Load</button>
-      </div>
+      <div class="field"><label for="page">Page</label><input id="page" type="number" min="1" value="1" /></div>
+      <div class="field"><label for="page_size">Page size</label><input id="page_size" type="number" min="1" max="100" value="10" /></div>
+      <div class="field"><label>&nbsp;</label><button onclick="listCourses()">Load</button></div>
     </div>
     <table>
       <thead>
-        <tr><th>ID</th><th>Title</th><th>Price</th><th>Actions</th></tr>
+        <tr><th>ID</th><th>Title</th><th>Price</th><th>Author ID</th><th>Actions</th></tr>
       </thead>
       <tbody id="courses"></tbody>
     </table>
-    <p class="hint">If list is empty, DB may have no published courses yet.</p>
+    <div class="hint">If empty, DB may have no published courses.</div>
   </div>
 
   <div class="card">
-    <h2>Course Card</h2>
+    <h2>Course Detail</h2>
     <div class="row">
-      <div class="field">
-        <label for="course_id">Course ID</label>
-        <input id="course_id" type="number" min="1" />
-      </div>
-      <div class="field">
-        <label>&nbsp;</label>
-        <button onclick="getCourse()">View Card</button>
-      </div>
+      <div class="field"><label for="course_id">Course ID</label><input id="course_id" type="number" min="1" /></div>
+      <div class="field"><label>&nbsp;</label><button onclick="getCourse()">View Card</button></div>
     </div>
     <div id="detail"></div>
   </div>
 
   <div class="card">
     <h2>Actions By Course ID</h2>
-    <p class="hint">Buttons are always visible; unavailable actions are disabled by role.</p>
     <div class="row">
-      <div class="field">
-        <label for="action_course_id">Course ID</label>
-        <input id="action_course_id" type="number" min="1" />
-      </div>
+      <div class="field"><label for="action_course_id">Course ID</label><input id="action_course_id" type="number" min="1" /></div>
       <div class="field"><label>&nbsp;</label><button data-action="start" onclick="runAction('start')">start</button></div>
-      <div class="field"><label>&nbsp;</label><button data-action="hide" onclick="runAction('hide')">hide course</button></div>
-      <div class="field"><label>&nbsp;</label><button data-action="ban" onclick="runAction('ban')">ban course</button></div>
-      <div class="field"><label>&nbsp;</label><button data-action="soft" onclick="runAction('soft')">soft delete course</button></div>
-      <div class="field"><label>&nbsp;</label><button data-action="hard" onclick="runAction('hard')">hard delete course</button></div>
+      <div class="field"><label>&nbsp;</label><button data-action="hide" onclick="runAction('hide')">hide</button></div>
+      <div class="field"><label>&nbsp;</label><button data-action="ban" onclick="runAction('ban')">ban</button></div>
+      <div class="field"><label>&nbsp;</label><button data-action="soft" onclick="runAction('soft')">soft delete</button></div>
+      <div class="field"><label>&nbsp;</label><button data-action="hard" onclick="runAction('hard')">hard delete</button></div>
     </div>
   </div>
 
@@ -131,18 +119,25 @@
   <script>
     const apiBase = "/api/v1";
     const permissions = {
-      guest:   { read: true,  start: false, hide: false, ban: false, soft: false, hard: false },
-      student: { read: true,  start: true,  hide: false, ban: false, soft: false, hard: false },
-      author:  { read: true,  start: true,  hide: true,  ban: false, soft: true,  hard: false },
-      admin:   { read: true,  start: true,  hide: true,  ban: true,  soft: true,  hard: true  }
+      guest:   { read: true,  create: false, start: false, hide: false, ban: false, soft: false, hard: false },
+      student: { read: true,  create: false, start: true,  hide: false, ban: false, soft: false, hard: false },
+      author:  { read: true,  create: true,  start: true,  hide: true,  ban: false, soft: true,  hard: false },
+      admin:   { read: true,  create: true,  start: true,  hide: true,  ban: true,  soft: true,  hard: true  }
     };
 
     function currentRole() {
       return document.getElementById("role").value;
     }
 
+    function currentUserId() {
+      return document.getElementById("user_id").value;
+    }
+
     function roleHeaders() {
-      return { "X-Role": currentRole() };
+      const headers = { "X-Role": currentRole() };
+      const uid = currentUserId();
+      if (uid) headers["X-User-Id"] = uid;
+      return headers;
     }
 
     function can(action) {
@@ -171,9 +166,8 @@
 
     function updateRoleUi() {
       const role = currentRole();
-      document.getElementById("role_badge").textContent = role;
       document.getElementById("caps").textContent =
-        `Allowed: read=${permissions[role].read}, start=${permissions[role].start}, hide=${permissions[role].hide}, ban=${permissions[role].ban}, soft=${permissions[role].soft}, hard=${permissions[role].hard}`;
+        `role=${role} | create=${can("create")} | start=${can("start")} | hide=${can("hide")} | ban=${can("ban")} | soft=${can("soft")} | hard=${can("hard")}`;
       for (const btn of document.querySelectorAll("button[data-action]")) {
         btn.disabled = !can(btn.dataset.action);
       }
@@ -200,16 +194,35 @@
       tbody.innerHTML = "";
       if (!rows.length) {
         const tr = document.createElement("tr");
-        tr.innerHTML = `<td colspan="4">No published courses found. Seed DB and click Load.</td>`;
+        tr.innerHTML = `<td colspan="5">No courses found.</td>`;
         tbody.appendChild(tr);
         return;
       }
       for (const c of rows) {
         const tr = document.createElement("tr");
-        tr.innerHTML = `<td>${c.id}</td><td>${c.title}</td><td>${c.price}</td><td></td>`;
-        tr.children[3].appendChild(actionButtons(c.id));
+        tr.innerHTML = `<td>${c.id}</td><td>${c.title}</td><td>${c.price}</td><td>${c.author_id ?? "-"}</td><td></td>`;
+        tr.children[4].appendChild(actionButtons(c.id));
         tbody.appendChild(tr);
       }
+    }
+
+    async function createCourse() {
+      if (!can("create")) {
+        log(0, "Current role cannot create courses");
+        return;
+      }
+      const payload = {
+        title: document.getElementById("new_title").value,
+        price: Number(document.getElementById("new_price").value),
+        category_id: Number(document.getElementById("new_category_id").value),
+        status: document.getElementById("new_status").value
+      };
+      const { res } = await call(`${apiBase}/courses`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      if (res.status === 200) listCourses();
     }
 
     async function listCourses() {
@@ -224,10 +237,7 @@
 
     async function getCourse() {
       const id = document.getElementById("course_id").value;
-      if (!id) {
-        log(0, "Enter course ID");
-        return;
-      }
+      if (!id) return log(0, "Enter course ID");
       const { body } = await call(`${apiBase}/courses/${id}`);
       document.getElementById("detail").textContent = JSON.stringify(body, null, 2);
     }
@@ -242,10 +252,7 @@
 
     function runAction(type) {
       const id = document.getElementById("action_course_id").value;
-      if (!id) {
-        log(0, "Enter course ID");
-        return;
-      }
+      if (!id) return log(0, "Enter course ID");
       action(type, id);
     }
 

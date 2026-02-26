@@ -1,4 +1,12 @@
-from app.models import Category, Course, CourseStatus
+from app.models import Category, Course, CourseStatus, User, UserRole
+
+
+def _create_user(db_session, email: str, role: UserRole) -> User:
+    user = User(email=email, full_name=email.split("@")[0], role=role)
+    db_session.add(user)
+    db_session.commit()
+    db_session.refresh(user)
+    return user
 
 
 def test_list_courses_defaults_to_guest_and_returns_only_published_not_deleted(client, db_session):
@@ -70,48 +78,70 @@ def test_guest_can_view_course_card(client, db_session):
     assert payload["title"] == "FastAPI Starter"
 
 
-def test_soft_delete_forbidden_for_student_and_allowed_for_author(client, db_session):
+def test_author_can_create_course(client, db_session):
     category = Category(name="Data Science")
     db_session.add(category)
-    db_session.flush()
+    db_session.commit()
+    db_session.refresh(category)
+
+    author = _create_user(db_session, "author@example.com", UserRole.AUTHOR)
+
+    response = client.post(
+        "/api/v1/courses",
+        headers={"X-Role": "author", "X-User-Id": str(author.id)},
+        json={
+            "title": "ML Intro",
+            "description": "course",
+            "price": 120,
+            "category_id": category.id,
+            "status": "published",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["title"] == "ML Intro"
+    assert payload["author_id"] == author.id
+
+
+def test_author_cannot_soft_delete_foreign_course(client, db_session):
+    category = Category(name="Cloud")
+    db_session.add(category)
+    db_session.commit()
+    db_session.refresh(category)
+
+    author_owner = _create_user(db_session, "owner@example.com", UserRole.AUTHOR)
+    author_other = _create_user(db_session, "other@example.com", UserRole.AUTHOR)
 
     course = Course(
-        title="ML Intro",
+        title="DevOps 101",
         description="course",
-        price=120,
+        price=130,
         category_id=category.id,
         status=CourseStatus.PUBLISHED,
         is_deleted=False,
+        author_id=author_owner.id,
     )
     db_session.add(course)
     db_session.commit()
     db_session.refresh(course)
 
-    response_forbidden = client.delete(
+    response = client.delete(
         f"/api/v1/courses/{course.id}",
-        headers={"X-Role": "student"},
+        headers={"X-Role": "author", "X-User-Id": str(author_other.id)},
     )
-    assert response_forbidden.status_code == 403
-
-    response_ok = client.delete(
-        f"/api/v1/courses/{course.id}",
-        headers={"X-Role": "author"},
-    )
-    assert response_ok.status_code == 200
-
-    db_session.refresh(course)
-    assert course.is_deleted is True
+    assert response.status_code == 404
 
 
 def test_start_course_forbidden_for_guest_and_allowed_for_student(client, db_session):
-    category = Category(name="Cloud")
+    category = Category(name="Security")
     db_session.add(category)
     db_session.flush()
 
     course = Course(
-        title="DevOps 101",
+        title="AppSec Basics",
         description="course start",
-        price=130,
+        price=95,
         category_id=category.id,
         status=CourseStatus.PUBLISHED,
         is_deleted=False,

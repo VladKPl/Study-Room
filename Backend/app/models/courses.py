@@ -43,6 +43,8 @@ class Course(Base):
 
     category_id = Column(Integer, ForeignKey("categories.id"))
     category = relationship("Category", back_populates="courses")
+    author_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    author = relationship("User", back_populates="courses")
 
     lessons = relationship("Lesson", back_populates="course", cascade="all, delete-orphan")
 

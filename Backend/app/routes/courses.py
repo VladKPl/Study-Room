@@ -2,11 +2,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models.courses import Course, CourseStatus
-from app.models.users import UserRole
+from app.models.courses import Category, Course, CourseStatus
+from app.models.users import User, UserRole
 from app.repositories.courses import CourseRepository
-from app.schemas.courses import CourseBase, CourseResponse
-from app.security.rbac import require_roles
+from app.schemas.courses import CourseBase, CourseCreate, CourseResponse
+from app.security.rbac import get_current_user_id, require_roles
 
 router = APIRouter()
 
@@ -30,6 +30,40 @@ def _get_public_course_or_404(db: Session, course_id: int) -> Course:
     if not course:
         raise HTTPException(status_code=404, detail="Course not found")
     return course
+
+
+def _require_user_id_for_author(role: UserRole, user_id: int | None) -> int | None:
+    if role == UserRole.AUTHOR and user_id is None:
+        raise HTTPException(
+            status_code=400,
+            detail="X-User-Id header is required for author operations",
+        )
+    return user_id
+
+
+def _get_owner_mutable_course_or_404(
+    db: Session,
+    course_id: int,
+    role: UserRole,
+    user_id: int | None,
+) -> Course:
+    query = db.query(Course).filter(
+        Course.id == course_id,
+        Course.is_deleted.is_(False),
+    )
+    if role == UserRole.AUTHOR:
+        query = query.filter(Course.author_id == user_id)
+    course = query.first()
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    return course
+
+
+def _get_user_or_404(db: Session, user_id: int) -> User:
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return user
 
 
 @router.get("/courses", response_model=CourseResponse)
@@ -74,6 +108,37 @@ def get_course_detail(
     return _get_public_course_or_404(db, course_id)
 
 
+@router.post("/courses", response_model=CourseBase)
+def create_course(
+    payload: CourseCreate,
+    db: Session = Depends(get_db),
+    role: UserRole = Depends(require_roles(UserRole.AUTHOR, UserRole.ADMIN)),
+    user_id: int | None = Depends(get_current_user_id),
+):
+    user_id = _require_user_id_for_author(role, user_id)
+
+    category = db.query(Category).filter(Category.id == payload.category_id).first()
+    if not category:
+        raise HTTPException(status_code=404, detail="Category not found")
+
+    if user_id is not None:
+        _get_user_or_404(db, user_id)
+
+    course = Course(
+        title=payload.title,
+        description=payload.description,
+        price=payload.price,
+        status=payload.status,
+        is_deleted=False,
+        category_id=payload.category_id,
+        author_id=user_id,
+    )
+    db.add(course)
+    db.commit()
+    db.refresh(course)
+    return course
+
+
 @router.post("/courses/{course_id}/start")
 def start_course(
     course_id: int,
@@ -89,9 +154,11 @@ def start_course(
 def soft_delete_course(
     course_id: int,
     db: Session = Depends(get_db),
-    _: UserRole = Depends(require_roles(UserRole.AUTHOR, UserRole.ADMIN)),
+    role: UserRole = Depends(require_roles(UserRole.AUTHOR, UserRole.ADMIN)),
+    user_id: int | None = Depends(get_current_user_id),
 ):
-    course = _get_active_course_or_404(db, course_id)
+    user_id = _require_user_id_for_author(role, user_id)
+    course = _get_owner_mutable_course_or_404(db, course_id, role, user_id)
     course.is_deleted = True
     db.commit()
     return {"message": f"Course {course_id} moved to trash"}
@@ -101,9 +168,11 @@ def soft_delete_course(
 def hide_course(
     course_id: int,
     db: Session = Depends(get_db),
-    _: UserRole = Depends(require_roles(UserRole.AUTHOR, UserRole.ADMIN)),
+    role: UserRole = Depends(require_roles(UserRole.AUTHOR, UserRole.ADMIN)),
+    user_id: int | None = Depends(get_current_user_id),
 ):
-    course = _get_active_course_or_404(db, course_id)
+    user_id = _require_user_id_for_author(role, user_id)
+    course = _get_owner_mutable_course_or_404(db, course_id, role, user_id)
     course.status = CourseStatus.HIDDEN
     db.commit()
     return {"message": "Course hidden"}

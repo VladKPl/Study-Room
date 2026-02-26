@@ -1,40 +1,41 @@
-# Testing With PostgreSQL
+# Тестирование с PostgreSQL
 
-## 1) Set test database URL
+## 1) Укажите URL тестовой базы данных
 
-Use env var:
+Используйте переменную окружения:
 
 ```powershell
-$env:TEST_DATABASE_URL="postgresql://postgres:24163542@localhost:5432/studyroom_test"
+$env:TEST_DATABASE_URL="postgresql://<user>:<password>@localhost:5432/studyroom_test"
 ```
 
-Or put this value into your shell profile / CI secrets.
+Либо сохраните это значение в профиле shell / секретах CI.
 
-## 2) Apply migrations into test DB
+## 2) Примените миграции в тестовую БД
 
 ```powershell
 $env:DATABASE_URL=$env:TEST_DATABASE_URL
 .\.venv\Scripts\alembic.exe upgrade head
 ```
 
-## 3) Run tests
+## 3) Запустите тесты
 
 ```powershell
 pytest -q
 ```
 
-Tests automatically use `TEST_DATABASE_URL` and truncate tables between cases.
+Тесты автоматически используют `TEST_DATABASE_URL` и очищают таблицы между кейсами.
 
-## 4) Demo page
+## 4) Демо-страница
 
-Run API:
+Запустите API:
 
 ```powershell
 uvicorn app.main:app --reload
 ```
 
-Open:
+Откройте:
 
 - `http://127.0.0.1:8000/demo`
 
-Use role switcher (`guest`, `student`, `author`, `admin`) to verify RBAC behaviour.
+Переключайте роли (`guest`, `student`, `author`, `admin`) для проверки поведения RBAC.
+Для операций автора дополнительно передайте `X-User-Id`.
