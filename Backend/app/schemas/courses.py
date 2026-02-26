@@ -1,20 +1,16 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from typing import List, Optional
 
 class LessonBase(BaseModel):
     id: int
     title: str
     video_url: Optional[str] = None
-
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class CategoryBase(BaseModel):
     id: int
     name: str
-
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class CourseBase(BaseModel):
     id: int  
@@ -23,9 +19,7 @@ class CourseBase(BaseModel):
     price: float
     category: Optional[CategoryBase] = None
     lessons: List[LessonBase] = Field(default_factory=list)
-
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class CourseResponse(BaseModel):
     data: List[CourseBase]
