@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import List, Optional
 
 class LessonBase(BaseModel):
@@ -22,7 +22,7 @@ class CourseBase(BaseModel):
     description: Optional[str] = None 
     price: float
     category: Optional[CategoryBase] = None
-    lessons: List[LessonBase] = []
+    lessons: List[LessonBase] = Field(default_factory=list)
 
     class Config:
         from_attributes = True
