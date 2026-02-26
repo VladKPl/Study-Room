@@ -15,7 +15,7 @@ def test_connection():
         # Пытаемся выполнить простейший запрос
         with engine.connect() as connection:
             connection.execute(text("SELECT 1"))
-        print("Успех! Бэкенд успешно подключился к PostgreSQL.")
+        print("Бэкенд успешно подключился к PostgreSQL.")
     except Exception as e:
         print(f"Ошибка подключения: {e}")
 
