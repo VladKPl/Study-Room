@@ -19,9 +19,6 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    userrole_enum = sa.Enum("student", "author", "admin", name="userrole")
-    userrole_enum.create(op.get_bind())
-
     op.create_table(
         "users",
         sa.Column("id", sa.Integer(), nullable=False),
@@ -43,4 +40,7 @@ def downgrade() -> None:
     op.drop_index(op.f("ix_users_id"), table_name="users")
     op.drop_index(op.f("ix_users_email"), table_name="users")
     op.drop_table("users")
-    sa.Enum(name="userrole").drop(op.get_bind())
+    sa.Enum("student", "author", "admin", name="userrole").drop(
+        op.get_bind(),
+        checkfirst=True,
+    )
