@@ -7,11 +7,31 @@
 | `id` | `Integer` | нет | serial | PK, index |
 | `email` | `String` | нет | - | unique, index |
 | `full_name` | `String` | нет | - | - |
-| `role` | `Enum(userrole)` | нет | `student` | значения: `guest`, `student`, `author`, `admin` |
+| `password_hash` | `String` | да | - | для пользователя только с OAuth может быть `NULL` |
+| `is_active` | `Boolean` | нет | `true` | - |
+| `is_email_verified` | `Boolean` | нет | `false` | - |
+| `created_at` | `DateTime(timezone=True)` | нет | `now()` | - |
+| `updated_at` | `DateTime(timezone=True)` | нет | `now()` | - |
+| `role` | `Enum(userrole)` | нет | `student` | `guest`, `student`, `author`, `admin` |
 
 Примечания:
-- Роль по умолчанию в БД для зарегистрированного аккаунта — `student`.
-- Роль анонимного посетителя (`guest`) берётся из логики API (`X-Role` fallback), а не из записи в таблице `users`.
+- При регистрации роль по умолчанию: `student`.
+- `guest` не хранится как запись пользователя; это анонимный режим без токена.
+
+## oauth_accounts
+
+| Поле | Тип | Null | По умолчанию | Ограничения |
+|---|---|---|---|---|
+| `id` | `Integer` | нет | serial | PK, index |
+| `user_id` | `Integer` | нет | - | FK -> `users.id`, index, `ON DELETE CASCADE` |
+| `provider` | `String(32)` | нет | - | index |
+| `provider_user_id` | `String(255)` | нет | - | - |
+| `provider_email` | `String` | да | - | - |
+| `created_at` | `DateTime(timezone=True)` | нет | `now()` | - |
+
+Уникальные ограничения:
+- `uq_oauth_provider_uid` на (`provider`, `provider_user_id`)
+- `uq_oauth_user_provider` на (`user_id`, `provider`)
 
 ## categories
 
@@ -28,14 +48,15 @@
 | `title` | `String` | нет | - | index |
 | `description` | `Text` | да | - | - |
 | `price` | `Float` | нет | - | - |
-| `status` | `Enum(coursestatus)` | нет | `DRAFT` | значения: `DRAFT`, `PUBLISHED`, `HIDDEN`, `BANNED` |
-| `is_deleted` | `Boolean` | нет | `false` | флаг soft delete |
+| `status` | `Enum(coursestatus)` | нет | `DRAFT` | `DRAFT`, `PUBLISHED`, `HIDDEN`, `BANNED` |
+| `is_deleted` | `Boolean` | нет | `false` | признак мягкого удаления |
 | `category_id` | `Integer` | да | - | FK -> `categories.id` |
-| `author_id` | `Integer` | да | - | FK -> `users.id`, владелец курса |
+| `author_id` | `Integer` | да | - | FK -> `users.id`, index |
 
 Индексы:
 - `ix_courses_visible_status_price(status, is_deleted, price)`
 - `ix_courses_title`
+- `ix_courses_author_id`
 
 ## lessons
 
@@ -48,28 +69,27 @@
 
 ## Связи
 
+- `User (1) -> (N) Course`
+- `User (1) -> (N) OAuthAccount`
 - `Category (1) -> (N) Course`
 - `Course (1) -> (N) Lesson`
-- `User (1) -> (N) Course`
 
-В ORM:
-- `Category.courses` <-> `Course.category`
-- `Course.lessons` <-> `Lesson.course`
-- для `Course.lessons` включён каскад `all, delete-orphan`.
+ORM-связи:
 - `User.courses` <-> `Course.author`
+- `User.oauth_accounts` <-> `OAuthAccount.user`
+- `Category.courses` <-> `Course.category`
+- `Course.lessons` <-> `Lesson.course` (`cascade="all, delete-orphan"`)
 
-## Валидация на уровне API
+## Базовая валидация API
 
-- Ограничения query-параметров в list endpoint:
+- Параметры запроса списка курсов:
   - `min_price >= 0`
   - `max_price >= 0`
   - `page >= 1`
   - `1 <= page_size <= 100`
-  - `sort` соответствует `price_asc|price_desc`
-- RBAC по ролям:
+  - `sort` = `price_asc | price_desc`
+- Роли и доступ:
   - `guest`: только чтение
-  - `student`: может начать курс
-  - `author`: может создавать курс и изменять только свои курсы
+  - `student`: может начинать курс
+  - `author`: создает курсы и меняет только свои
   - `admin`: полный доступ к модерации
-- Для author-операций используется заголовок `X-User-Id`
-  (временная идентификация до внедрения полноценной аутентификации).

@@ -1,41 +1,63 @@
 # Тестирование с PostgreSQL
 
-## 1) Укажите URL тестовой базы данных
+## 1. Создать тестовую базу
 
-Используйте переменную окружения:
+Пример: `studyroom_test`.
+
+## 2. Настроить переменную окружения
+
+В PowerShell:
 
 ```powershell
 $env:TEST_DATABASE_URL="postgresql://<user>:<password>@localhost:5432/studyroom_test"
 ```
 
-Либо сохраните это значение в профиле shell / секретах CI.
-
-## 2) Примените миграции в тестовую БД
+## 3. Применить миграции в тестовую БД
 
 ```powershell
 $env:DATABASE_URL=$env:TEST_DATABASE_URL
 .\.venv\Scripts\alembic.exe upgrade head
 ```
 
-## 3) Запустите тесты
+Проверка:
 
 ```powershell
-pytest -q
+.\.venv\Scripts\alembic.exe current
 ```
 
-Тесты автоматически используют `TEST_DATABASE_URL` и очищают таблицы между кейсами.
-
-## 4) Демо-страница
-
-Запустите API:
+## 4. Запустить тесты
 
 ```powershell
-uvicorn app.main:app --reload
+$env:TEST_DATABASE_URL="postgresql://<user>:<password>@localhost:5432/studyroom_test"
+.\.venv\Scripts\pytest.exe -q
 ```
 
-Откройте:
+## 5. Проверка аутентификации и RBAC вручную
 
-- `http://127.0.0.1:8000/demo`
+1. Зарегистрировать пользователя:
 
-Переключайте роли (`guest`, `student`, `author`, `admin`) для проверки поведения RBAC.
-Для операций автора дополнительно передайте `X-User-Id`.
+```http
+POST /api/v1/auth/register
+```
+
+2. Получить `access_token` и передавать его в заголовке:
+
+```http
+Authorization: Bearer <access_token>
+```
+
+3. Проверить ограничения ролей:
+- без токена = `guest`,
+- `student` не может создавать курс,
+- `author` может создавать и редактировать только свои курсы,
+- `admin` может выполнять модерацию (`ban`, `hard-delete`).
+
+## 6. Проверка Google OAuth
+
+1. Убедиться, что в `.env` заполнены:
+   - `GOOGLE_CLIENT_ID`
+   - `GOOGLE_CLIENT_SECRET`
+   - `GOOGLE_REDIRECT_URI`
+2. Перейти на:
+   - `GET /api/v1/auth/google/login`
+3. После успешного callback проверить, что API возвращает локальные `access_token`/`refresh_token`.

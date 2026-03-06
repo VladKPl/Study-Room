@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models.courses import Category, Course, CourseStatus
-from app.models.users import User, UserRole
+from app.models.users import UserRole
 from app.repositories.courses import CourseRepository
 from app.schemas.courses import CourseBase, CourseCreate, CourseResponse
 from app.security.rbac import get_current_user_id, require_roles
@@ -35,8 +35,8 @@ def _get_public_course_or_404(db: Session, course_id: int) -> Course:
 def _require_user_id_for_author(role: UserRole, user_id: int | None) -> int | None:
     if role == UserRole.AUTHOR and user_id is None:
         raise HTTPException(
-            status_code=400,
-            detail="X-User-Id header is required for author operations",
+            status_code=401,
+            detail="Authentication required for author operations",
         )
     return user_id
 
@@ -57,13 +57,6 @@ def _get_owner_mutable_course_or_404(
     if not course:
         raise HTTPException(status_code=404, detail="Course not found")
     return course
-
-
-def _get_user_or_404(db: Session, user_id: int) -> User:
-    user = db.query(User).filter(User.id == user_id).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    return user
 
 
 @router.get("/courses", response_model=CourseResponse)
@@ -120,9 +113,6 @@ def create_course(
     category = db.query(Category).filter(Category.id == payload.category_id).first()
     if not category:
         raise HTTPException(status_code=404, detail="Category not found")
-
-    if user_id is not None:
-        _get_user_or_404(db, user_id)
 
     course = Course(
         title=payload.title,

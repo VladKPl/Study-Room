@@ -16,7 +16,7 @@
     button[disabled] { opacity: 0.6; cursor: not-allowed; }
     .caps { font-size: 14px; margin-top: 8px; }
     .hint { font-size: 13px; color: #444; margin-top: 4px; }
-    #detail, #log { white-space: pre-wrap; background: #f7f7f7; padding: 10px; border-radius: 8px; min-height: 50px; }
+    #detail, #log, #token_info { white-space: pre-wrap; background: #f7f7f7; padding: 10px; border-radius: 8px; min-height: 50px; }
     table { width: 100%; border-collapse: collapse; }
     th, td { border: 1px solid #ddd; padding: 8px; text-align: left; vertical-align: top; }
     .actions { display: flex; gap: 6px; flex-wrap: wrap; }
@@ -24,25 +24,26 @@
 </head>
 <body>
   <h1>Course API Demo</h1>
-  <p>Demo for RBAC and DB-backed operations.</p>
+  <p>Authorization now uses <code>Authorization: Bearer &lt;token&gt;</code>.</p>
+
+  <div class="card">
+    <h2>Auth</h2>
+    <div class="row">
+      <div class="field"><label for="auth_email">Email</label><input id="auth_email" /></div>
+      <div class="field"><label for="auth_password">Password</label><input id="auth_password" type="password" /></div>
+      <div class="field"><label for="auth_full_name">Full name (register)</label><input id="auth_full_name" /></div>
+      <div class="field"><label>&nbsp;</label><button onclick="registerUser()">Register</button></div>
+      <div class="field"><label>&nbsp;</label><button onclick="loginUser()">Login</button></div>
+      <div class="field"><label>&nbsp;</label><button onclick="googleLogin()">Google login</button></div>
+      <div class="field"><label>&nbsp;</label><button onclick="refreshToken()">Refresh</button></div>
+      <div class="field"><label>&nbsp;</label><button onclick="logout()">Logout</button></div>
+    </div>
+    <div class="hint">New account gets role <code>student</code>. For <code>author/admin</code> test users, set role in DB and login.</div>
+    <div id="token_info"></div>
+  </div>
 
   <div class="card">
     <h2>Context</h2>
-    <div class="row">
-      <div class="field">
-        <label for="role">X-Role</label>
-        <select id="role" onchange="updateRoleUi()">
-          <option value="guest">guest</option>
-          <option value="student">student</option>
-          <option value="author">author</option>
-          <option value="admin">admin</option>
-        </select>
-      </div>
-      <div class="field">
-        <label for="user_id">X-User-Id (for author)</label>
-        <input id="user_id" type="number" min="1" placeholder="e.g. 1" />
-      </div>
-    </div>
     <div id="caps" class="caps"></div>
   </div>
 
@@ -61,7 +62,6 @@
       </div>
       <div class="field"><label>&nbsp;</label><button data-action="create" onclick="createCourse()">Create</button></div>
     </div>
-    <div class="hint">Author must pass valid `X-User-Id` to create own course.</div>
   </div>
 
   <div class="card">
@@ -118,6 +118,13 @@
 
   <script>
     const apiBase = "/api/v1";
+    const state = {
+      accessToken: "",
+      refreshToken: "",
+      currentUser: null,
+      lastCourses: []
+    };
+
     const permissions = {
       guest:   { read: true,  create: false, start: false, hide: false, ban: false, soft: false, hard: false },
       student: { read: true,  create: false, start: true,  hide: false, ban: false, soft: false, hard: false },
@@ -126,22 +133,16 @@
     };
 
     function currentRole() {
-      return document.getElementById("role").value;
-    }
-
-    function currentUserId() {
-      return document.getElementById("user_id").value;
-    }
-
-    function roleHeaders() {
-      const headers = { "X-Role": currentRole() };
-      const uid = currentUserId();
-      if (uid) headers["X-User-Id"] = uid;
-      return headers;
+      return state.currentUser?.role || "guest";
     }
 
     function can(action) {
       return !!permissions[currentRole()][action];
+    }
+
+    function authHeaders() {
+      if (!state.accessToken) return {};
+      return { "Authorization": `Bearer ${state.accessToken}` };
     }
 
     function log(status, payload) {
@@ -149,10 +150,27 @@
       document.getElementById("log").textContent = `status: ${status}\n${text}`;
     }
 
+    function updateAuthInfo() {
+      const tokenShort = state.accessToken ? `${state.accessToken.slice(0, 22)}...` : "(none)";
+      const userText = state.currentUser ? JSON.stringify(state.currentUser, null, 2) : "guest mode";
+      document.getElementById("token_info").textContent = `access_token: ${tokenShort}\n${userText}`;
+    }
+
+    function updateRoleUi() {
+      const role = currentRole();
+      document.getElementById("caps").textContent =
+        `role=${role} | create=${can("create")} | start=${can("start")} | hide=${can("hide")} | ban=${can("ban")} | soft=${can("soft")} | hard=${can("hard")}`;
+      for (const btn of document.querySelectorAll("button[data-action]")) {
+        btn.disabled = !can(btn.dataset.action);
+      }
+      updateAuthInfo();
+      renderCourses(state.lastCourses);
+    }
+
     async function call(path, opts = {}) {
       const res = await fetch(path, {
         ...opts,
-        headers: { ...(opts.headers || {}), ...roleHeaders() }
+        headers: { ...(opts.headers || {}), ...authHeaders() }
       });
       let body;
       try {
@@ -164,14 +182,61 @@
       return { res, body };
     }
 
-    function updateRoleUi() {
-      const role = currentRole();
-      document.getElementById("caps").textContent =
-        `role=${role} | create=${can("create")} | start=${can("start")} | hide=${can("hide")} | ban=${can("ban")} | soft=${can("soft")} | hard=${can("hard")}`;
-      for (const btn of document.querySelectorAll("button[data-action]")) {
-        btn.disabled = !can(btn.dataset.action);
-      }
-      renderCourses(window.lastCourses || []);
+    function absorbAuthPayload(body) {
+      if (!body || !body.access_token) return;
+      state.accessToken = body.access_token;
+      if (body.refresh_token) state.refreshToken = body.refresh_token;
+      if (body.user) state.currentUser = body.user;
+      updateRoleUi();
+    }
+
+    async function registerUser() {
+      const payload = {
+        email: document.getElementById("auth_email").value,
+        password: document.getElementById("auth_password").value,
+        full_name: document.getElementById("auth_full_name").value || null
+      };
+      const { body } = await call(`${apiBase}/auth/register`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      absorbAuthPayload(body);
+    }
+
+    async function loginUser() {
+      const payload = {
+        email: document.getElementById("auth_email").value,
+        password: document.getElementById("auth_password").value
+      };
+      const { body } = await call(`${apiBase}/auth/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      absorbAuthPayload(body);
+    }
+
+    async function refreshToken() {
+      if (!state.refreshToken) return log(0, "No refresh token, login first");
+      const { body } = await call(`${apiBase}/auth/refresh`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ refresh_token: state.refreshToken })
+      });
+      absorbAuthPayload(body);
+    }
+
+    function googleLogin() {
+      window.location.href = `${apiBase}/auth/google/login`;
+    }
+
+    function logout() {
+      state.accessToken = "";
+      state.refreshToken = "";
+      state.currentUser = null;
+      log(0, "Logged out. Current role = guest");
+      updateRoleUi();
     }
 
     function actionButtons(id) {
@@ -189,7 +254,7 @@
     }
 
     function renderCourses(rows) {
-      window.lastCourses = rows;
+      state.lastCourses = rows;
       const tbody = document.getElementById("courses");
       tbody.innerHTML = "";
       if (!rows.length) {
@@ -207,10 +272,7 @@
     }
 
     async function createCourse() {
-      if (!can("create")) {
-        log(0, "Current role cannot create courses");
-        return;
-      }
+      if (!can("create")) return log(0, "Current role cannot create courses");
       const payload = {
         title: document.getElementById("new_title").value,
         price: Number(document.getElementById("new_price").value),
