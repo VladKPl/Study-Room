@@ -9,6 +9,8 @@ __pycache__/
 # env/config
 .env
 .env.*
+!Backend/.env.example
+!Backend/.env.test.example
 
 # IDE
 .vscode/

@@ -1,20 +1,55 @@
 from typing import Callable
 
-from fastapi import Depends, Header, HTTPException
+from fastapi import Depends, Header, HTTPException, status
+from sqlalchemy.orm import Session
 
-from app.models.users import UserRole
+from app.database import get_db
+from app.models.users import User, UserRole
+from app.security.auth import decode_token, parse_subject_user_id
 
 
-def get_current_role(x_role: str | None = Header(default=None, alias="X-Role")) -> UserRole:
-    raw_role = (x_role or UserRole.GUEST.value).strip().lower()
-    try:
-        return UserRole(raw_role)
-    except ValueError as exc:
-        allowed_values = ", ".join(role.value for role in UserRole)
+def _extract_bearer_token(authorization: str | None) -> str | None:
+    if authorization is None or authorization.strip() == "":
+        return None
+
+    parts = authorization.strip().split(" ", 1)
+    if len(parts) != 2 or parts[0].lower() != "bearer" or parts[1].strip() == "":
         raise HTTPException(
-            status_code=400,
-            detail=f"Invalid X-Role value. Allowed: {allowed_values}",
-        ) from exc
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid Authorization header format. Use: Bearer <token>",
+        )
+    return parts[1].strip()
+
+
+def get_current_user(
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    db: Session = Depends(get_db),
+) -> User | None:
+    token = _extract_bearer_token(authorization)
+    if token is None:
+        return None
+
+    payload = decode_token(token)
+    if payload.get("type") != "access":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid access token",
+        )
+
+    user_id = parse_subject_user_id(payload)
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user or not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User not found or inactive",
+        )
+    return user
+
+
+def get_current_role(current_user: User | None = Depends(get_current_user)) -> UserRole:
+    if current_user is None:
+        return UserRole.GUEST
+    return current_user.role
 
 
 def require_roles(*allowed_roles: UserRole) -> Callable[[UserRole], UserRole]:
@@ -30,16 +65,7 @@ def require_roles(*allowed_roles: UserRole) -> Callable[[UserRole], UserRole]:
     return dependency
 
 
-def get_current_user_id(x_user_id: str | None = Header(default=None, alias="X-User-Id")) -> int | None:
-    if x_user_id is None or x_user_id.strip() == "":
+def get_current_user_id(current_user: User | None = Depends(get_current_user)) -> int | None:
+    if current_user is None:
         return None
-
-    try:
-        user_id = int(x_user_id)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail="X-User-Id must be an integer") from exc
-
-    if user_id <= 0:
-        raise HTTPException(status_code=400, detail="X-User-Id must be greater than 0")
-
-    return user_id
+    return current_user.id

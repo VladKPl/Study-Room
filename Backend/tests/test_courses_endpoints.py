@@ -1,4 +1,5 @@
 from app.models import Category, Course, CourseStatus, User, UserRole
+from app.security.auth import create_access_token
 
 
 def _create_user(db_session, email: str, role: UserRole) -> User:
@@ -7,6 +8,11 @@ def _create_user(db_session, email: str, role: UserRole) -> User:
     db_session.commit()
     db_session.refresh(user)
     return user
+
+
+def _auth_headers(user: User) -> dict[str, str]:
+    token = create_access_token(user.id, user.role)
+    return {"Authorization": f"Bearer {token}"}
 
 
 def test_list_courses_defaults_to_guest_and_returns_only_published_not_deleted(client, db_session):
@@ -53,6 +59,11 @@ def test_list_courses_defaults_to_guest_and_returns_only_published_not_deleted(c
     assert payload["data"][0]["title"] == "Python Basics"
 
 
+def test_invalid_authorization_header_returns_401(client):
+    response = client.get("/api/v1/courses", headers={"Authorization": "Token abc"})
+    assert response.status_code == 401
+
+
 def test_guest_can_view_course_card(client, db_session):
     category = Category(name="Backend")
     db_session.add(category)
@@ -88,7 +99,7 @@ def test_author_can_create_course(client, db_session):
 
     response = client.post(
         "/api/v1/courses",
-        headers={"X-Role": "author", "X-User-Id": str(author.id)},
+        headers=_auth_headers(author),
         json={
             "title": "ML Intro",
             "description": "course",
@@ -128,7 +139,7 @@ def test_author_cannot_soft_delete_foreign_course(client, db_session):
 
     response = client.delete(
         f"/api/v1/courses/{course.id}",
-        headers={"X-Role": "author", "X-User-Id": str(author_other.id)},
+        headers=_auth_headers(author_other),
     )
     assert response.status_code == 404
 
@@ -155,6 +166,6 @@ def test_start_course_forbidden_for_guest_and_allowed_for_student(client, db_ses
 
     response_student = client.post(
         f"/api/v1/courses/{course.id}/start",
-        headers={"X-Role": "student"},
+        headers=_auth_headers(_create_user(db_session, "student@example.com", UserRole.STUDENT)),
     )
     assert response_student.status_code == 200
