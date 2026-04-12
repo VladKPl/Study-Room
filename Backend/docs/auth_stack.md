@@ -41,3 +41,11 @@
 - `GET /api/v1/auth/google/login`
 - `GET /api/v1/auth/google/callback`
 - После callback создаётся (или привязывается) локальный пользователь и выдаются локальные JWT-токены.
+
+## Этап 5: Refresh-token revocation (сделано)
+
+- Добавлена таблица `refresh_tokens` для хранения и отзыва refresh-токенов.
+- `POST /api/v1/auth/refresh` теперь делает rotation:
+  - старый refresh-токен помечается как `revoked_at`,
+  - выдаётся новая пара `access_token + refresh_token`.
+- Добавлен `POST /api/v1/auth/logout`, который отзывает все активные refresh-токены пользователя.

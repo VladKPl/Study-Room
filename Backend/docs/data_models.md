@@ -33,6 +33,17 @@
 - `uq_oauth_provider_uid` на (`provider`, `provider_user_id`)
 - `uq_oauth_user_provider` на (`user_id`, `provider`)
 
+## refresh_tokens
+
+| Поле | Тип | Null | По умолчанию | Ограничения |
+|---|---|---|---|---|
+| `id` | `Integer` | нет | serial | PK, index |
+| `user_id` | `Integer` | нет | - | FK -> `users.id`, index, `ON DELETE CASCADE` |
+| `token` | `String` | нет | - | unique |
+| `expires_at` | `DateTime(timezone=True)` | нет | - | index |
+| `revoked_at` | `DateTime(timezone=True)` | да | - | отметка отзыва |
+| `created_at` | `DateTime(timezone=True)` | нет | `now()` | - |
+
 ## categories
 
 | Поле | Тип | Null | По умолчанию | Ограничения |
@@ -71,12 +82,14 @@
 
 - `User (1) -> (N) Course`
 - `User (1) -> (N) OAuthAccount`
+- `User (1) -> (N) RefreshToken`
 - `Category (1) -> (N) Course`
 - `Course (1) -> (N) Lesson`
 
 ORM-связи:
 - `User.courses` <-> `Course.author`
 - `User.oauth_accounts` <-> `OAuthAccount.user`
+- `User.refresh_tokens` <-> `RefreshToken.user`
 - `Category.courses` <-> `Course.category`
 - `Course.lessons` <-> `Lesson.course` (`cascade="all, delete-orphan"`)
 

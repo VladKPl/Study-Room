@@ -6,6 +6,7 @@ from alembic import context
 from dotenv import load_dotenv
 from app.database import Base
 from app.models.courses import Course
+from app.models.refresh_tokens import RefreshToken
 from app.models.users import User
 
 load_dotenv()

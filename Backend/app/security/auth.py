@@ -1,4 +1,5 @@
 import os
+import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -47,14 +48,12 @@ def create_access_token(user_id: int, role: UserRole) -> str:
     return jwt.encode(payload, _jwt_secret(), algorithm=_jwt_algorithm())
 
 
-def create_refresh_token(user_id: int) -> str:
-    expire_at = datetime.now(timezone.utc) + timedelta(days=_refresh_expire_days())
-    payload: dict[str, Any] = {
-        "sub": str(user_id),
-        "type": "refresh",
-        "exp": expire_at,
-    }
-    return jwt.encode(payload, _jwt_secret(), algorithm=_jwt_algorithm())
+def refresh_token_expires_at() -> datetime:
+    return datetime.now(timezone.utc) + timedelta(days=_refresh_expire_days())
+
+
+def create_refresh_token() -> str:
+    return secrets.token_urlsafe(48)
 
 
 def decode_token(token: str) -> dict[str, Any]:
