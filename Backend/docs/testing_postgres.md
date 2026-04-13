@@ -52,7 +52,17 @@ Authorization: Bearer <access_token>
 - `author` может создавать и редактировать только свои курсы,
 - `admin` может выполнять модерацию (`ban`, `hard-delete`).
 
-## 6. Проверка Google OAuth
+## 6. Проверка refresh-token revocation
+
+1. Получить пару токенов через `POST /api/v1/auth/login` или `POST /api/v1/auth/register`.
+2. Вызвать `POST /api/v1/auth/refresh` с текущим `refresh_token`.
+3. Убедиться, что вернулся новый `refresh_token`.
+4. Повторно вызвать `POST /api/v1/auth/refresh` со старым токеном:
+   - ожидается `401` (токен уже revoked).
+5. Вызвать `POST /api/v1/auth/logout` с access-токеном в `Authorization`.
+6. Убедиться, что последующий `POST /api/v1/auth/refresh` возвращает `401`.
+
+## 7. Проверка Google OAuth
 
 1. Убедиться, что в `.env` заполнены:
    - `GOOGLE_CLIENT_ID`

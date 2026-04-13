@@ -1,6 +1,6 @@
 from urllib.parse import parse_qs, urlparse
 
-from app.models import OAuthAccount, User, UserRole
+from app.models import OAuthAccount, RefreshToken, User, UserRole
 from app.routes import auth as auth_routes
 from app.security.auth import hash_password
 
@@ -69,20 +69,62 @@ def test_login_success_returns_tokens(client, db_session):
     assert payload["user"]["email"] == "login@example.com"
 
 
-def test_refresh_returns_new_access_token(client, db_session):
+def test_refresh_rotates_token_and_revokes_old(client, db_session):
     register_response = client.post(
         "/api/v1/auth/register",
         json={"email": "refresh@example.com", "password": "RefreshPass123"},
     )
     assert register_response.status_code == 201
-    refresh_token = register_response.json()["refresh_token"]
+    initial_refresh_token = register_response.json()["refresh_token"]
 
-    response = client.post("/api/v1/auth/refresh", json={"refresh_token": refresh_token})
+    response = client.post("/api/v1/auth/refresh", json={"refresh_token": initial_refresh_token})
 
     assert response.status_code == 200
     payload = response.json()
     assert payload["token_type"] == "bearer"
     assert payload["access_token"]
+    assert payload["refresh_token"]
+    assert payload["refresh_token"] != initial_refresh_token
+
+    old_token = db_session.query(RefreshToken).filter(
+        RefreshToken.token == initial_refresh_token
+    ).first()
+    assert old_token is not None
+    assert old_token.revoked_at is not None
+
+
+def test_refresh_reuse_of_revoked_token_returns_401(client):
+    register_response = client.post(
+        "/api/v1/auth/register",
+        json={"email": "revoke@example.com", "password": "RefreshPass123"},
+    )
+    assert register_response.status_code == 201
+    initial_refresh_token = register_response.json()["refresh_token"]
+
+    first_refresh = client.post("/api/v1/auth/refresh", json={"refresh_token": initial_refresh_token})
+    assert first_refresh.status_code == 200
+
+    second_refresh = client.post("/api/v1/auth/refresh", json={"refresh_token": initial_refresh_token})
+    assert second_refresh.status_code == 401
+
+
+def test_logout_revokes_user_refresh_tokens(client):
+    register_response = client.post(
+        "/api/v1/auth/register",
+        json={"email": "logout@example.com", "password": "RefreshPass123"},
+    )
+    assert register_response.status_code == 201
+    payload = register_response.json()
+
+    logout_response = client.post(
+        "/api/v1/auth/logout",
+        headers={"Authorization": f"Bearer {payload['access_token']}"},
+    )
+    assert logout_response.status_code == 200
+    assert logout_response.json()["revoked_count"] >= 1
+
+    refresh_response = client.post("/api/v1/auth/refresh", json={"refresh_token": payload["refresh_token"]})
+    assert refresh_response.status_code == 401
 
 
 def _set_google_env(monkeypatch):

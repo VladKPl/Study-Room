@@ -1,5 +1,6 @@
 import os
 import secrets
+from datetime import datetime, timezone
 from urllib.parse import urlencode
 
 import httpx
@@ -8,22 +9,24 @@ from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.models.refresh_tokens import RefreshToken
 from app.models.users import OAuthAccount, User, UserRole
 from app.schemas.auth import (
-    AccessTokenResponse,
     LoginRequest,
+    LogoutResponse,
     RefreshRequest,
     RegisterRequest,
+    TokenRotateResponse,
     TokenPairResponse,
 )
 from app.security.auth import (
     create_access_token,
     create_refresh_token,
-    decode_token,
     hash_password,
-    parse_subject_user_id,
+    refresh_token_expires_at,
     verify_password,
 )
+from app.security.rbac import get_current_user
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -37,9 +40,22 @@ def _normalize_email(email: str) -> str:
     return email.strip().lower()
 
 
-def _issue_token_pair(user: User) -> TokenPairResponse:
+def _require_authenticated_user(current_user: User | None = Depends(get_current_user)) -> User:
+    if current_user is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
+    return current_user
+
+
+def _issue_token_pair(db: Session, user: User) -> TokenPairResponse:
     access_token = create_access_token(user.id, user.role)
-    refresh_token = create_refresh_token(user.id)
+    refresh_token = create_refresh_token()
+    db.add(
+        RefreshToken(
+            user_id=user.id,
+            token=refresh_token,
+            expires_at=refresh_token_expires_at(),
+        )
+    )
     return TokenPairResponse(
         access_token=access_token,
         refresh_token=refresh_token,
@@ -181,10 +197,11 @@ def google_callback(
     if not user.is_active:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User is inactive")
 
+    token_pair = _issue_token_pair(db, user)
     db.commit()
     db.refresh(user)
     response.delete_cookie(key=GOOGLE_STATE_COOKIE)
-    return _issue_token_pair(user)
+    return token_pair
 
 
 @router.post("/register", response_model=TokenPairResponse, status_code=status.HTTP_201_CREATED)
@@ -204,9 +221,11 @@ def register(payload: RegisterRequest, db: Session = Depends(get_db)):
         role=UserRole.STUDENT,
     )
     db.add(user)
+    db.flush()
+    token_pair = _issue_token_pair(db, user)
     db.commit()
     db.refresh(user)
-    return _issue_token_pair(user)
+    return token_pair
 
 
 @router.post("/login", response_model=TokenPairResponse)
@@ -220,19 +239,54 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)):
     if not user.is_active:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User is inactive")
 
-    return _issue_token_pair(user)
+    token_pair = _issue_token_pair(db, user)
+    db.commit()
+    return token_pair
 
 
-@router.post("/refresh", response_model=AccessTokenResponse)
+@router.post("/refresh", response_model=TokenRotateResponse)
 def refresh_tokens(payload: RefreshRequest, db: Session = Depends(get_db)):
-    decoded = decode_token(payload.refresh_token)
-    if decoded.get("type") != "refresh":
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid refresh token")
+    now = datetime.now(timezone.utc)
+    token_row = db.query(RefreshToken).filter(
+        RefreshToken.token == payload.refresh_token,
+        RefreshToken.revoked_at.is_(None),
+        RefreshToken.expires_at > now,
+    ).first()
+    if not token_row:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Refresh token is invalid or revoked")
 
-    user_id = parse_subject_user_id(decoded)
-    user = db.query(User).filter(User.id == user_id).first()
+    user = db.query(User).filter(User.id == token_row.user_id).first()
     if not user or not user.is_active:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid refresh token")
+        token_row.revoked_at = now
+        db.commit()
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Refresh token is invalid or revoked")
 
-    access_token = create_access_token(user.id, user.role)
-    return AccessTokenResponse(access_token=access_token)
+    token_row.revoked_at = now
+    next_refresh_token = create_refresh_token()
+    db.add(
+        RefreshToken(
+            user_id=user.id,
+            token=next_refresh_token,
+            expires_at=refresh_token_expires_at(),
+        )
+    )
+    db.commit()
+
+    return TokenRotateResponse(
+        access_token=create_access_token(user.id, user.role),
+        refresh_token=next_refresh_token,
+    )
+
+
+@router.post("/logout", response_model=LogoutResponse)
+def logout(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(_require_authenticated_user),
+):
+    now = datetime.now(timezone.utc)
+    revoked_count = db.query(RefreshToken).filter(
+        RefreshToken.user_id == current_user.id,
+        RefreshToken.revoked_at.is_(None),
+    ).update({RefreshToken.revoked_at: now}, synchronize_session=False)
+    db.commit()
+    return LogoutResponse(message="Logged out", revoked_count=revoked_count)

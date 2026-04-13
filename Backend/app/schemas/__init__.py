@@ -3,8 +3,10 @@ from app.schemas.auth import (
     AccessTokenResponse,
     AuthUserResponse,
     LoginRequest,
+    LogoutResponse,
     RefreshRequest,
     RegisterRequest,
+    TokenRotateResponse,
     TokenPairResponse,
 )
 
@@ -14,7 +16,9 @@ __all__ = [
     "CourseBase",
     "CourseResponse",
     "LoginRequest",
+    "LogoutResponse",
     "RefreshRequest",
     "RegisterRequest",
+    "TokenRotateResponse",
     "TokenPairResponse",
 ]

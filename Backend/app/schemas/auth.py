@@ -39,3 +39,14 @@ class TokenPairResponse(BaseModel):
 class AccessTokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
+
+
+class TokenRotateResponse(BaseModel):
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"
+
+
+class LogoutResponse(BaseModel):
+    message: str
+    revoked_count: int
