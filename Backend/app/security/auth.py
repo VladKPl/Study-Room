@@ -25,8 +25,13 @@ def _access_expire_minutes() -> int:
     return int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "30"))
 
 
-def _refresh_expire_days() -> int:
-    return int(os.getenv("REFRESH_TOKEN_EXPIRE_DAYS", "7"))
+def _refresh_expire_hours() -> int:
+    # Backward-compatible: if hours is not set, fall back to days.
+    refresh_hours = os.getenv("REFRESH_TOKEN_EXPIRE_HOURS")
+    if refresh_hours is not None:
+        return int(refresh_hours)
+    refresh_days = int(os.getenv("REFRESH_TOKEN_EXPIRE_DAYS", "7"))
+    return refresh_days * 24
 
 
 def hash_password(password: str) -> str:
@@ -49,7 +54,7 @@ def create_access_token(user_id: int, role: UserRole) -> str:
 
 
 def refresh_token_expires_at() -> datetime:
-    return datetime.now(timezone.utc) + timedelta(days=_refresh_expire_days())
+    return datetime.now(timezone.utc) + timedelta(hours=_refresh_expire_hours())
 
 
 def create_refresh_token() -> str:
