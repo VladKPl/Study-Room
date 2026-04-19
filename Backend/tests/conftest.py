@@ -1,4 +1,5 @@
 import os
+import shutil
 import sys
 from collections.abc import Iterator
 from pathlib import Path
@@ -61,6 +62,9 @@ def apply_migrations() -> Iterator[None]:
 
 @pytest.fixture(autouse=True)
 def clean_db() -> None:
+    uploads_dir = BACKEND_DIR / "media_uploads"
+    if uploads_dir.exists():
+        shutil.rmtree(uploads_dir)
     with engine.begin() as conn:
         conn.execute(
             text(

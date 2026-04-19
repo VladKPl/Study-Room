@@ -1,9 +1,10 @@
 import uuid
+from pathlib import Path
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from app.database import get_db
 from app.models.courses import (
     BlockContentType,
@@ -37,6 +38,8 @@ from app.schemas.courses import (
     LessonCreate,
     LessonModerationUpdate,
     LessonUpdate,
+    MediaAssetBase,
+    MediaStatusUpdate,
     MediaUploadUrlRequest,
     MediaUploadUrlResponse,
     SubmitBlockLinkRequest,
@@ -44,6 +47,8 @@ from app.schemas.courses import (
 from app.security.rbac import get_current_user_id, require_roles
 
 router = APIRouter()
+BACKEND_ROOT = Path(__file__).resolve().parents[2]
+UPLOADS_ROOT = BACKEND_ROOT / "media_uploads"
 
 
 def _get_active_course_or_404(db: Session, course_id: int) -> Course:
@@ -135,6 +140,21 @@ def _get_owner_mutable_block_or_404(
     return block
 
 
+def _get_owned_media_asset_or_404(
+    db: Session,
+    asset_id: int,
+    role: UserRole,
+    user_id: int | None,
+) -> MediaAsset:
+    query = db.query(MediaAsset).filter(MediaAsset.id == asset_id)
+    if role == UserRole.AUTHOR:
+        query = query.filter(MediaAsset.owner_id == user_id)
+    asset = query.first()
+    if not asset:
+        raise HTTPException(status_code=404, detail="Media asset not found")
+    return asset
+
+
 def _get_owner_mutable_lesson_or_404(
     db: Session,
     course_id: int,
@@ -171,7 +191,7 @@ def _apply_lesson_content_rules(lesson: Lesson) -> None:
     if lesson.content_type == LessonContentType.LINK:
         if not lesson.external_url:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail="external_url is required for link lessons",
             )
         if lesson.moderation_status == LessonModerationStatus.NOT_REQUIRED:
@@ -190,7 +210,7 @@ def _apply_block_content_rules(block: CourseBlock) -> None:
     if block.content_type == BlockContentType.LINK:
         if not block.external_url:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail="external_url is required for link blocks",
             )
         if block.moderation_status == BlockModerationStatus.NOT_REQUIRED:
@@ -207,8 +227,21 @@ def _apply_block_content_rules(block: CourseBlock) -> None:
         block.file_asset_id = None
     elif block.file_asset_id is None:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="file_asset_id is required for file blocks",
+        )
+
+
+def _ensure_file_asset_ready(db: Session, block: CourseBlock) -> None:
+    if block.content_type != BlockContentType.FILE or block.file_asset_id is None:
+        return
+    asset = db.query(MediaAsset).filter(MediaAsset.id == block.file_asset_id).first()
+    if not asset:
+        raise HTTPException(status_code=404, detail="Media asset not found")
+    if asset.status != MediaAssetStatus.READY:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Media asset must have ready status for file blocks",
         )
 
 
@@ -370,11 +403,7 @@ def create_course_block(
     section = _get_owner_mutable_section_or_404(db, section_id, role, user_id)
 
     if payload.file_asset_id is not None:
-        asset = db.query(MediaAsset).filter(MediaAsset.id == payload.file_asset_id).first()
-        if not asset:
-            raise HTTPException(status_code=404, detail="Media asset not found")
-        if role == UserRole.AUTHOR and asset.owner_id != user_id:
-            raise HTTPException(status_code=403, detail="Media asset does not belong to current author")
+        _get_owned_media_asset_or_404(db, payload.file_asset_id, role, user_id)
 
     block = CourseBlock(
         section_id=section.id,
@@ -387,6 +416,7 @@ def create_course_block(
         moderation_status=BlockModerationStatus.NOT_REQUIRED,
     )
     _apply_block_content_rules(block)
+    _ensure_file_asset_ready(db, block)
     db.add(block)
     db.commit()
     db.refresh(block)
@@ -406,15 +436,12 @@ def update_course_block(
 
     updates = payload.model_dump(exclude_unset=True)
     if "file_asset_id" in updates and updates["file_asset_id"] is not None:
-        asset = db.query(MediaAsset).filter(MediaAsset.id == updates["file_asset_id"]).first()
-        if not asset:
-            raise HTTPException(status_code=404, detail="Media asset not found")
-        if role == UserRole.AUTHOR and asset.owner_id != user_id:
-            raise HTTPException(status_code=403, detail="Media asset does not belong to current author")
+        _get_owned_media_asset_or_404(db, updates["file_asset_id"], role, user_id)
 
     for field, value in updates.items():
         setattr(block, field, value)
     _apply_block_content_rules(block)
+    _ensure_file_asset_ready(db, block)
     db.commit()
     db.refresh(block)
     return block
@@ -431,7 +458,7 @@ def create_media_upload_url(
     if user_id is None:
         raise HTTPException(status_code=401, detail="Authentication required")
     object_key = f"{user_id}/{uuid.uuid4()}-{payload.filename}"
-    storage_url = f"https://cdn.studyroom.local/{object_key}"
+    storage_url = f"/uploads/{object_key}"
 
     asset = MediaAsset(
         owner_id=user_id,
@@ -445,13 +472,68 @@ def create_media_upload_url(
     db.commit()
     db.refresh(asset)
 
-    upload_url = f"https://upload.studyroom.local/{object_key}?asset_id={asset.id}"
+    upload_url = f"/api/v1/media/{asset.id}/upload"
     return MediaUploadUrlResponse(
         asset_id=asset.id,
         upload_url=upload_url,
         storage_url=storage_url,
         status=asset.status,
     )
+
+
+@router.put("/media/{asset_id}/upload", response_model=MediaAssetBase)
+async def upload_media_file(
+    asset_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    role: UserRole = Depends(require_roles(UserRole.AUTHOR, UserRole.ADMIN)),
+    user_id: int | None = Depends(get_current_user_id),
+):
+    user_id = _require_user_id_for_author(role, user_id)
+    asset = _get_owned_media_asset_or_404(db, asset_id, role, user_id)
+
+    request_content_type = request.headers.get("content-type")
+    if request_content_type and asset.mime_type != request_content_type:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Uploaded file mime type does not match media asset",
+        )
+
+    payload = await request.body()
+    if len(payload) > asset.size_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Uploaded file exceeds declared size",
+        )
+
+    raw_filename = request.headers.get("x-filename")
+    safe_name = Path(raw_filename).name if raw_filename else f"asset-{asset.id}"
+    relative_path = Path(str(asset.owner_id)) / f"{asset.id}_{safe_name}"
+    full_path = UPLOADS_ROOT / relative_path
+    full_path.parent.mkdir(parents=True, exist_ok=True)
+    full_path.write_bytes(payload)
+
+    asset.storage_url = f"/uploads/{relative_path.as_posix()}"
+    asset.status = MediaAssetStatus.READY
+    db.commit()
+    db.refresh(asset)
+    return asset
+
+
+@router.patch("/media/{asset_id}/status", response_model=MediaAssetBase)
+def update_media_asset_status(
+    asset_id: int,
+    payload: MediaStatusUpdate,
+    db: Session = Depends(get_db),
+    _: UserRole = Depends(require_roles(UserRole.ADMIN)),
+):
+    asset = db.query(MediaAsset).filter(MediaAsset.id == asset_id).first()
+    if not asset:
+        raise HTTPException(status_code=404, detail="Media asset not found")
+    asset.status = payload.status
+    db.commit()
+    db.refresh(asset)
+    return asset
 
 
 @router.post("/blocks/{block_id}/submit-link", response_model=CourseBlockBase)
@@ -490,7 +572,7 @@ def moderate_link_block(
         BlockModerationStatus.REJECTED,
     ):
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="moderation_status must be approved or rejected",
         )
     block.moderation_status = payload.moderation_status
@@ -584,7 +666,7 @@ def moderate_lesson_link(
         LessonModerationStatus.REJECTED,
     ):
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="moderation_status must be approved or rejected",
         )
     lesson.moderation_status = payload.moderation_status

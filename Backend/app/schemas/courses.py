@@ -149,6 +149,20 @@ class MediaUploadUrlResponse(BaseModel):
     status: MediaAssetStatus
 
 
+class MediaAssetBase(BaseModel):
+    id: int
+    asset_type: MediaAssetType
+    mime_type: str
+    size_bytes: int
+    storage_url: str
+    status: MediaAssetStatus
+    model_config = ConfigDict(from_attributes=True)
+
+
+class MediaStatusUpdate(BaseModel):
+    status: MediaAssetStatus
+
+
 class CourseSectionWithBlocks(BaseModel):
     id: int
     course_id: int

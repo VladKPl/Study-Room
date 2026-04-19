@@ -4,6 +4,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.routes import auth, courses
 
@@ -18,6 +19,8 @@ def _get_cors_origins() -> list[str]:
 
 app = FastAPI(title="Course Platform API")
 BASE_DIR = Path(__file__).resolve().parent
+UPLOADS_DIR = BASE_DIR.parent / "media_uploads"
+UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 
 cors_origins = _get_cors_origins()
 allow_all_origins = "*" in cors_origins
@@ -31,6 +34,7 @@ app.add_middleware(
 
 app.include_router(courses.router, prefix="/api/v1")
 app.include_router(auth.router, prefix="/api/v1")
+app.mount("/uploads", StaticFiles(directory=UPLOADS_DIR), name="uploads")
 
 @app.get("/")
 async def root():

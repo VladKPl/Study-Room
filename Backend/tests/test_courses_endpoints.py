@@ -9,7 +9,9 @@ from app.models import (
     Lesson,
     LessonContentType,
     LessonModerationStatus,
+    MediaAsset,
     MediaAssetStatus,
+    MediaAssetType,
     User,
     UserRole,
 )
@@ -459,6 +461,103 @@ def test_author_can_request_upload_url(client, db_session):
     assert payload["status"] == MediaAssetStatus.PENDING.value
     assert payload["upload_url"]
     assert payload["storage_url"]
+
+
+def test_author_can_upload_media_file_and_get_ready_status(client, db_session):
+    author = _create_user(db_session, "asset-upload-author@example.com", UserRole.AUTHOR)
+    create_response = client.post(
+        "/api/v1/media/upload-url",
+        headers=_auth_headers(author),
+        json={
+            "asset_type": "file",
+            "mime_type": "application/pdf",
+            "size_bytes": 2048,
+            "filename": "upload.pdf",
+        },
+    )
+    assert create_response.status_code == 201
+    asset_id = create_response.json()["asset_id"]
+
+    upload_response = client.put(
+        f"/api/v1/media/{asset_id}/upload",
+        headers={
+            **_auth_headers(author),
+            "Content-Type": "application/pdf",
+            "X-Filename": "upload.pdf",
+        },
+        content=b"%PDF-1.4 test",
+    )
+    assert upload_response.status_code == 200
+    payload = upload_response.json()
+    assert payload["id"] == asset_id
+    assert payload["status"] == MediaAssetStatus.READY.value
+    assert payload["storage_url"].startswith("/uploads/")
+
+
+def test_file_block_requires_ready_media_asset(client, db_session):
+    category = Category(name="FileBlockPending")
+    db_session.add(category)
+    db_session.commit()
+    db_session.refresh(category)
+
+    author = _create_user(db_session, "file-block-author@example.com", UserRole.AUTHOR)
+    course = Course(
+        title="File Block Course",
+        description="file block",
+        price=42,
+        category_id=category.id,
+        status=CourseStatus.DRAFT,
+        is_deleted=False,
+        author_id=author.id,
+    )
+    db_session.add(course)
+    db_session.flush()
+    section = CourseSection(course_id=course.id, title="Files", position=1)
+    db_session.add(section)
+    db_session.flush()
+    asset = MediaAsset(
+        owner_id=author.id,
+        asset_type=MediaAssetType.FILE,
+        mime_type="application/pdf",
+        size_bytes=1024,
+        storage_url="/uploads/pending.pdf",
+        status=MediaAssetStatus.PENDING,
+    )
+    db_session.add(asset)
+    db_session.commit()
+    db_session.refresh(asset)
+
+    response = client.post(
+        f"/api/v1/sections/{section.id}/blocks",
+        headers=_auth_headers(author),
+        json={"content_type": "file", "file_asset_id": asset.id},
+    )
+    assert response.status_code == 422
+    assert "ready status" in response.json()["detail"]
+
+
+def test_admin_can_update_media_asset_status(client, db_session):
+    author = _create_user(db_session, "asset-status-author@example.com", UserRole.AUTHOR)
+    admin = _create_user(db_session, "asset-status-admin@example.com", UserRole.ADMIN)
+    asset = MediaAsset(
+        owner_id=author.id,
+        asset_type=MediaAssetType.FILE,
+        mime_type="application/pdf",
+        size_bytes=1024,
+        storage_url="/uploads/pending.pdf",
+        status=MediaAssetStatus.PENDING,
+    )
+    db_session.add(asset)
+    db_session.commit()
+    db_session.refresh(asset)
+
+    response = client.patch(
+        f"/api/v1/media/{asset.id}/status",
+        headers=_auth_headers(admin),
+        json={"status": "rejected"},
+    )
+    assert response.status_code == 200
+    assert response.json()["status"] == MediaAssetStatus.REJECTED.value
 
 
 def test_submit_link_and_admin_moderation_for_block(client, db_session):
