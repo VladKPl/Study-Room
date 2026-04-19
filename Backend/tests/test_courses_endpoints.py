@@ -549,3 +549,51 @@ def test_non_admin_cannot_moderate_block_link(client, db_session):
         json={"moderation_status": "approved"},
     )
     assert response.status_code == 403
+
+
+def test_author_can_fetch_editor_sections_with_blocks(client, db_session):
+    category = Category(name="EditorRead")
+    db_session.add(category)
+    db_session.commit()
+    db_session.refresh(category)
+
+    author = _create_user(db_session, "editor-read-author@example.com", UserRole.AUTHOR)
+    course = Course(
+        title="Editor Read Course",
+        description="read structure",
+        price=50,
+        category_id=category.id,
+        status=CourseStatus.DRAFT,
+        is_deleted=False,
+        author_id=author.id,
+    )
+    db_session.add(course)
+    db_session.flush()
+
+    section1 = CourseSection(course_id=course.id, title="Section 1", position=1)
+    section2 = CourseSection(course_id=course.id, title="Section 2", position=2)
+    db_session.add_all([section1, section2])
+    db_session.flush()
+
+    block1 = CourseBlock(section_id=section1.id, content_type=BlockContentType.TEXT, text_content="Intro", position=1)
+    block2 = CourseBlock(
+        section_id=section1.id,
+        content_type=BlockContentType.VIDEO,
+        video_url="https://cdn.example.com/lesson.mp4",
+        position=2,
+    )
+    db_session.add_all([block1, block2])
+    db_session.commit()
+
+    response = client.get(
+        f"/api/v1/courses/{course.id}/sections",
+        headers=_auth_headers(author),
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["course_id"] == course.id
+    assert len(payload["sections"]) == 2
+    assert payload["sections"][0]["title"] == "Section 1"
+    assert len(payload["sections"][0]["blocks"]) == 2
+    assert payload["sections"][0]["blocks"][0]["content_type"] == "text"

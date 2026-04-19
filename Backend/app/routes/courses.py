@@ -28,9 +28,11 @@ from app.schemas.courses import (
     CourseBlockCreate,
     CourseBlockUpdate,
     CourseCreate,
+    CourseEditorSectionsResponse,
     CourseResponse,
     CourseSectionBase,
     CourseSectionCreate,
+    CourseSectionWithBlocks,
     LessonBase,
     LessonCreate,
     LessonModerationUpdate,
@@ -261,6 +263,49 @@ def get_course_for_editor(
 ):
     user_id = _require_user_id_for_author(role, user_id)
     return _get_owner_mutable_course_or_404(db, course_id, role, user_id)
+
+
+@router.get("/courses/{course_id}/sections", response_model=CourseEditorSectionsResponse)
+def get_course_sections_for_editor(
+    course_id: int,
+    db: Session = Depends(get_db),
+    role: UserRole = Depends(require_roles(UserRole.AUTHOR, UserRole.ADMIN)),
+    user_id: int | None = Depends(get_current_user_id),
+):
+    user_id = _require_user_id_for_author(role, user_id)
+    _get_owner_mutable_course_or_404(db, course_id, role, user_id)
+
+    sections = (
+        db.query(CourseSection)
+        .filter(CourseSection.course_id == course_id)
+        .order_by(CourseSection.position.asc(), CourseSection.id.asc())
+        .all()
+    )
+    blocks = (
+        db.query(CourseBlock)
+        .join(CourseSection, CourseBlock.section_id == CourseSection.id)
+        .filter(CourseSection.course_id == course_id)
+        .order_by(CourseSection.position.asc(), CourseBlock.position.asc(), CourseBlock.id.asc())
+        .all()
+    )
+
+    blocks_by_section: dict[int, list[CourseBlockBase]] = {}
+    for block in blocks:
+        blocks_by_section.setdefault(block.section_id, []).append(CourseBlockBase.model_validate(block))
+
+    payload_sections: list[CourseSectionWithBlocks] = []
+    for section in sections:
+        payload_sections.append(
+            CourseSectionWithBlocks(
+                id=section.id,
+                course_id=section.course_id,
+                title=section.title,
+                position=section.position,
+                blocks=blocks_by_section.get(section.id, []),
+            )
+        )
+
+    return CourseEditorSectionsResponse(course_id=course_id, sections=payload_sections)
 
 
 @router.post("/courses", response_model=CourseBase)

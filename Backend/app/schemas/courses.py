@@ -147,3 +147,16 @@ class MediaUploadUrlResponse(BaseModel):
     upload_url: str
     storage_url: str
     status: MediaAssetStatus
+
+
+class CourseSectionWithBlocks(BaseModel):
+    id: int
+    course_id: int
+    title: str
+    position: int
+    blocks: List[CourseBlockBase] = Field(default_factory=list)
+
+
+class CourseEditorSectionsResponse(BaseModel):
+    course_id: int
+    sections: List[CourseSectionWithBlocks] = Field(default_factory=list)
