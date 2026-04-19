@@ -1,10 +1,15 @@
 from app.models import (
+    BlockContentType,
+    BlockModerationStatus,
     Category,
     Course,
+    CourseBlock,
+    CourseSection,
     CourseStatus,
     Lesson,
     LessonContentType,
     LessonModerationStatus,
+    MediaAssetStatus,
     User,
     UserRole,
 )
@@ -352,6 +357,194 @@ def test_non_admin_cannot_moderate_lesson_link(client, db_session):
 
     response = client.patch(
         f"/api/v1/courses/{course.id}/lessons/{lesson.id}/link-moderation",
+        headers=_auth_headers(author),
+        json={"moderation_status": "approved"},
+    )
+    assert response.status_code == 403
+
+
+def test_author_can_create_section_and_block(client, db_session):
+    category = Category(name="Sections")
+    db_session.add(category)
+    db_session.commit()
+    db_session.refresh(category)
+
+    author = _create_user(db_session, "section-author@example.com", UserRole.AUTHOR)
+    course = Course(
+        title="Section Course",
+        description="sections",
+        price=70,
+        category_id=category.id,
+        status=CourseStatus.DRAFT,
+        is_deleted=False,
+        author_id=author.id,
+    )
+    db_session.add(course)
+    db_session.commit()
+    db_session.refresh(course)
+
+    section_response = client.post(
+        f"/api/v1/courses/{course.id}/sections",
+        headers=_auth_headers(author),
+        json={"title": "Getting Started"},
+    )
+    assert section_response.status_code == 201
+    section_id = section_response.json()["id"]
+
+    block_response = client.post(
+        f"/api/v1/sections/{section_id}/blocks",
+        headers=_auth_headers(author),
+        json={"content_type": "text", "text_content": "Welcome"},
+    )
+    assert block_response.status_code == 201
+    assert block_response.json()["content_type"] == "text"
+    assert block_response.json()["text_content"] == "Welcome"
+
+
+def test_author_can_update_block(client, db_session):
+    category = Category(name="BlocksUpdate")
+    db_session.add(category)
+    db_session.commit()
+    db_session.refresh(category)
+
+    author = _create_user(db_session, "block-author@example.com", UserRole.AUTHOR)
+    course = Course(
+        title="Block Course",
+        description="blocks",
+        price=55,
+        category_id=category.id,
+        status=CourseStatus.DRAFT,
+        is_deleted=False,
+        author_id=author.id,
+    )
+    db_session.add(course)
+    db_session.flush()
+    section = CourseSection(course_id=course.id, title="Part 1", position=1)
+    db_session.add(section)
+    db_session.flush()
+    block = CourseBlock(section_id=section.id, content_type=BlockContentType.TEXT, text_content="Old text", position=1)
+    db_session.add(block)
+    db_session.commit()
+    db_session.refresh(block)
+
+    response = client.patch(
+        f"/api/v1/blocks/{block.id}",
+        headers=_auth_headers(author),
+        json={"content_type": "video", "video_url": "https://cdn.example.com/video.mp4"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["content_type"] == "video"
+    assert payload["video_url"] == "https://cdn.example.com/video.mp4"
+    assert payload["text_content"] is None
+
+
+def test_author_can_request_upload_url(client, db_session):
+    author = _create_user(db_session, "asset-author@example.com", UserRole.AUTHOR)
+
+    response = client.post(
+        "/api/v1/media/upload-url",
+        headers=_auth_headers(author),
+        json={
+            "asset_type": "file",
+            "mime_type": "application/pdf",
+            "size_bytes": 2048,
+            "filename": "intro.pdf",
+        },
+    )
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["asset_id"] > 0
+    assert payload["status"] == MediaAssetStatus.PENDING.value
+    assert payload["upload_url"]
+    assert payload["storage_url"]
+
+
+def test_submit_link_and_admin_moderation_for_block(client, db_session):
+    category = Category(name="LinkBlocks")
+    db_session.add(category)
+    db_session.commit()
+    db_session.refresh(category)
+
+    author = _create_user(db_session, "link-author@example.com", UserRole.AUTHOR)
+    admin = _create_user(db_session, "link-admin@example.com", UserRole.ADMIN)
+
+    course = Course(
+        title="Link Block Course",
+        description="link blocks",
+        price=40,
+        category_id=category.id,
+        status=CourseStatus.DRAFT,
+        is_deleted=False,
+        author_id=author.id,
+    )
+    db_session.add(course)
+    db_session.flush()
+    section = CourseSection(course_id=course.id, title="Links", position=1)
+    db_session.add(section)
+    db_session.flush()
+    block = CourseBlock(
+        section_id=section.id,
+        content_type=BlockContentType.TEXT,
+        text_content="placeholder",
+        position=1,
+    )
+    db_session.add(block)
+    db_session.commit()
+    db_session.refresh(block)
+
+    submit_response = client.post(
+        f"/api/v1/blocks/{block.id}/submit-link",
+        headers=_auth_headers(author),
+        json={"external_url": "https://example.com/resource"},
+    )
+    assert submit_response.status_code == 200
+    assert submit_response.json()["moderation_status"] == BlockModerationStatus.PENDING.value
+
+    moderate_response = client.patch(
+        f"/api/v1/moderation/links/{block.id}",
+        headers=_auth_headers(admin),
+        json={"moderation_status": "approved"},
+    )
+    assert moderate_response.status_code == 200
+    assert moderate_response.json()["moderation_status"] == BlockModerationStatus.APPROVED.value
+
+
+def test_non_admin_cannot_moderate_block_link(client, db_session):
+    category = Category(name="LinkBlocksDenied")
+    db_session.add(category)
+    db_session.commit()
+    db_session.refresh(category)
+
+    author = _create_user(db_session, "link-author-denied@example.com", UserRole.AUTHOR)
+    course = Course(
+        title="Denied Link Block Course",
+        description="link blocks",
+        price=45,
+        category_id=category.id,
+        status=CourseStatus.DRAFT,
+        is_deleted=False,
+        author_id=author.id,
+    )
+    db_session.add(course)
+    db_session.flush()
+    section = CourseSection(course_id=course.id, title="Denied", position=1)
+    db_session.add(section)
+    db_session.flush()
+    block = CourseBlock(
+        section_id=section.id,
+        content_type=BlockContentType.LINK,
+        external_url="https://example.com",
+        moderation_status=BlockModerationStatus.PENDING,
+        position=1,
+    )
+    db_session.add(block)
+    db_session.commit()
+    db_session.refresh(block)
+
+    response = client.patch(
+        f"/api/v1/moderation/links/{block.id}",
         headers=_auth_headers(author),
         json={"moderation_status": "approved"},
     )

@@ -64,7 +64,9 @@ def clean_db() -> None:
     with engine.begin() as conn:
         conn.execute(
             text(
-                "TRUNCATE TABLE lessons, courses, categories, users "
+                "TRUNCATE TABLE "
+                "course_blocks, course_sections, media_assets, "
+                "lessons, refresh_tokens, oauth_accounts, courses, categories, users "
                 "RESTART IDENTITY CASCADE"
             )
         )

@@ -1,26 +1,43 @@
+import uuid
+
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from app.database import get_db
 from app.models.courses import (
+    BlockContentType,
+    BlockModerationStatus,
     Category,
     Course,
+    CourseBlock,
+    CourseSection,
     CourseStatus,
     Lesson,
     LessonContentType,
     LessonModerationStatus,
+    MediaAsset,
+    MediaAssetStatus,
 )
 from app.models.users import UserRole
 from app.repositories.courses import CourseRepository
 from app.schemas.courses import (
+    BlockModerationUpdate,
     CourseBase,
+    CourseBlockBase,
+    CourseBlockCreate,
+    CourseBlockUpdate,
     CourseCreate,
     CourseResponse,
+    CourseSectionBase,
+    CourseSectionCreate,
     LessonBase,
     LessonCreate,
     LessonModerationUpdate,
     LessonUpdate,
+    MediaUploadUrlRequest,
+    MediaUploadUrlResponse,
+    SubmitBlockLinkRequest,
 )
 from app.security.rbac import get_current_user_id, require_roles
 
@@ -75,6 +92,47 @@ def _get_owner_mutable_course_or_404(
     return course
 
 
+def _get_owner_mutable_section_or_404(
+    db: Session,
+    section_id: int,
+    role: UserRole,
+    user_id: int | None,
+) -> CourseSection:
+    query = db.query(CourseSection).join(Course, CourseSection.course_id == Course.id).filter(
+        CourseSection.id == section_id,
+        Course.is_deleted.is_(False),
+    )
+    if role == UserRole.AUTHOR:
+        query = query.filter(Course.author_id == user_id)
+    section = query.first()
+    if not section:
+        raise HTTPException(status_code=404, detail="Section not found")
+    return section
+
+
+def _get_owner_mutable_block_or_404(
+    db: Session,
+    block_id: int,
+    role: UserRole,
+    user_id: int | None,
+) -> CourseBlock:
+    query = (
+        db.query(CourseBlock)
+        .join(CourseSection, CourseBlock.section_id == CourseSection.id)
+        .join(Course, CourseSection.course_id == Course.id)
+        .filter(
+            CourseBlock.id == block_id,
+            Course.is_deleted.is_(False),
+        )
+    )
+    if role == UserRole.AUTHOR:
+        query = query.filter(Course.author_id == user_id)
+    block = query.first()
+    if not block:
+        raise HTTPException(status_code=404, detail="Block not found")
+    return block
+
+
 def _get_owner_mutable_lesson_or_404(
     db: Session,
     course_id: int,
@@ -97,6 +155,16 @@ def _next_lesson_position(db: Session, course_id: int) -> int:
     return (current_max or 0) + 1
 
 
+def _next_section_position(db: Session, course_id: int) -> int:
+    current_max = db.query(func.max(CourseSection.position)).filter(CourseSection.course_id == course_id).scalar()
+    return (current_max or 0) + 1
+
+
+def _next_block_position(db: Session, section_id: int) -> int:
+    current_max = db.query(func.max(CourseBlock.position)).filter(CourseBlock.section_id == section_id).scalar()
+    return (current_max or 0) + 1
+
+
 def _apply_lesson_content_rules(lesson: Lesson) -> None:
     if lesson.content_type == LessonContentType.LINK:
         if not lesson.external_url:
@@ -114,6 +182,32 @@ def _apply_lesson_content_rules(lesson: Lesson) -> None:
         lesson.video_url = None
     if lesson.content_type != LessonContentType.FILE:
         lesson.attachment_url = None
+
+
+def _apply_block_content_rules(block: CourseBlock) -> None:
+    if block.content_type == BlockContentType.LINK:
+        if not block.external_url:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="external_url is required for link blocks",
+            )
+        if block.moderation_status == BlockModerationStatus.NOT_REQUIRED:
+            block.moderation_status = BlockModerationStatus.PENDING
+    else:
+        block.external_url = None
+        block.moderation_status = BlockModerationStatus.NOT_REQUIRED
+
+    if block.content_type != BlockContentType.TEXT:
+        block.text_content = None
+    if block.content_type != BlockContentType.VIDEO:
+        block.video_url = None
+    if block.content_type != BlockContentType.FILE:
+        block.file_asset_id = None
+    elif block.file_asset_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="file_asset_id is required for file blocks",
+        )
 
 
 @router.get("/courses", response_model=CourseResponse)
@@ -195,6 +289,169 @@ def create_course(
     db.commit()
     db.refresh(course)
     return course
+
+
+@router.post("/courses/{course_id}/sections", response_model=CourseSectionBase, status_code=status.HTTP_201_CREATED)
+def create_course_section(
+    course_id: int,
+    payload: CourseSectionCreate,
+    db: Session = Depends(get_db),
+    role: UserRole = Depends(require_roles(UserRole.AUTHOR, UserRole.ADMIN)),
+    user_id: int | None = Depends(get_current_user_id),
+):
+    user_id = _require_user_id_for_author(role, user_id)
+    _get_owner_mutable_course_or_404(db, course_id, role, user_id)
+
+    section = CourseSection(
+        course_id=course_id,
+        title=payload.title,
+        position=payload.position or _next_section_position(db, course_id),
+    )
+    db.add(section)
+    db.commit()
+    db.refresh(section)
+    return section
+
+
+@router.post("/sections/{section_id}/blocks", response_model=CourseBlockBase, status_code=status.HTTP_201_CREATED)
+def create_course_block(
+    section_id: int,
+    payload: CourseBlockCreate,
+    db: Session = Depends(get_db),
+    role: UserRole = Depends(require_roles(UserRole.AUTHOR, UserRole.ADMIN)),
+    user_id: int | None = Depends(get_current_user_id),
+):
+    user_id = _require_user_id_for_author(role, user_id)
+    section = _get_owner_mutable_section_or_404(db, section_id, role, user_id)
+
+    if payload.file_asset_id is not None:
+        asset = db.query(MediaAsset).filter(MediaAsset.id == payload.file_asset_id).first()
+        if not asset:
+            raise HTTPException(status_code=404, detail="Media asset not found")
+        if role == UserRole.AUTHOR and asset.owner_id != user_id:
+            raise HTTPException(status_code=403, detail="Media asset does not belong to current author")
+
+    block = CourseBlock(
+        section_id=section.id,
+        content_type=payload.content_type,
+        position=payload.position or _next_block_position(db, section.id),
+        text_content=payload.text_content,
+        video_url=payload.video_url,
+        file_asset_id=payload.file_asset_id,
+        external_url=payload.external_url,
+        moderation_status=BlockModerationStatus.NOT_REQUIRED,
+    )
+    _apply_block_content_rules(block)
+    db.add(block)
+    db.commit()
+    db.refresh(block)
+    return block
+
+
+@router.patch("/blocks/{block_id}", response_model=CourseBlockBase)
+def update_course_block(
+    block_id: int,
+    payload: CourseBlockUpdate,
+    db: Session = Depends(get_db),
+    role: UserRole = Depends(require_roles(UserRole.AUTHOR, UserRole.ADMIN)),
+    user_id: int | None = Depends(get_current_user_id),
+):
+    user_id = _require_user_id_for_author(role, user_id)
+    block = _get_owner_mutable_block_or_404(db, block_id, role, user_id)
+
+    updates = payload.model_dump(exclude_unset=True)
+    if "file_asset_id" in updates and updates["file_asset_id"] is not None:
+        asset = db.query(MediaAsset).filter(MediaAsset.id == updates["file_asset_id"]).first()
+        if not asset:
+            raise HTTPException(status_code=404, detail="Media asset not found")
+        if role == UserRole.AUTHOR and asset.owner_id != user_id:
+            raise HTTPException(status_code=403, detail="Media asset does not belong to current author")
+
+    for field, value in updates.items():
+        setattr(block, field, value)
+    _apply_block_content_rules(block)
+    db.commit()
+    db.refresh(block)
+    return block
+
+
+@router.post("/media/upload-url", response_model=MediaUploadUrlResponse, status_code=status.HTTP_201_CREATED)
+def create_media_upload_url(
+    payload: MediaUploadUrlRequest,
+    db: Session = Depends(get_db),
+    role: UserRole = Depends(require_roles(UserRole.AUTHOR, UserRole.ADMIN)),
+    user_id: int | None = Depends(get_current_user_id),
+):
+    user_id = _require_user_id_for_author(role, user_id)
+    if user_id is None:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    object_key = f"{user_id}/{uuid.uuid4()}-{payload.filename}"
+    storage_url = f"https://cdn.studyroom.local/{object_key}"
+
+    asset = MediaAsset(
+        owner_id=user_id,
+        asset_type=payload.asset_type,
+        mime_type=payload.mime_type,
+        size_bytes=payload.size_bytes,
+        storage_url=storage_url,
+        status=MediaAssetStatus.PENDING,
+    )
+    db.add(asset)
+    db.commit()
+    db.refresh(asset)
+
+    upload_url = f"https://upload.studyroom.local/{object_key}?asset_id={asset.id}"
+    return MediaUploadUrlResponse(
+        asset_id=asset.id,
+        upload_url=upload_url,
+        storage_url=storage_url,
+        status=asset.status,
+    )
+
+
+@router.post("/blocks/{block_id}/submit-link", response_model=CourseBlockBase)
+def submit_block_link(
+    block_id: int,
+    payload: SubmitBlockLinkRequest,
+    db: Session = Depends(get_db),
+    role: UserRole = Depends(require_roles(UserRole.AUTHOR, UserRole.ADMIN)),
+    user_id: int | None = Depends(get_current_user_id),
+):
+    user_id = _require_user_id_for_author(role, user_id)
+    block = _get_owner_mutable_block_or_404(db, block_id, role, user_id)
+    block.content_type = BlockContentType.LINK
+    block.external_url = payload.external_url
+    block.moderation_status = BlockModerationStatus.PENDING
+    _apply_block_content_rules(block)
+    db.commit()
+    db.refresh(block)
+    return block
+
+
+@router.patch("/moderation/links/{block_id}", response_model=CourseBlockBase)
+def moderate_link_block(
+    block_id: int,
+    payload: BlockModerationUpdate,
+    db: Session = Depends(get_db),
+    _: UserRole = Depends(require_roles(UserRole.ADMIN)),
+):
+    block = db.query(CourseBlock).filter(CourseBlock.id == block_id).first()
+    if not block:
+        raise HTTPException(status_code=404, detail="Block not found")
+    if block.content_type != BlockContentType.LINK:
+        raise HTTPException(status_code=400, detail="Only link blocks can be moderated")
+    if payload.moderation_status not in (
+        BlockModerationStatus.APPROVED,
+        BlockModerationStatus.REJECTED,
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="moderation_status must be approved or rejected",
+        )
+    block.moderation_status = payload.moderation_status
+    db.commit()
+    db.refresh(block)
+    return block
 
 
 @router.post("/courses/{course_id}/lessons", response_model=LessonBase, status_code=status.HTTP_201_CREATED)
