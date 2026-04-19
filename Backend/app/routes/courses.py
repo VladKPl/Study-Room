@@ -39,6 +39,7 @@ from app.schemas.courses import (
     LessonModerationUpdate,
     LessonUpdate,
     MediaAssetBase,
+    MediaAssetsResponse,
     MediaStatusUpdate,
     MediaUploadUrlRequest,
     MediaUploadUrlResponse,
@@ -479,6 +480,29 @@ def create_media_upload_url(
         storage_url=storage_url,
         status=asset.status,
     )
+
+
+@router.get("/media", response_model=MediaAssetsResponse)
+def list_media_assets(
+    status_filter: MediaAssetStatus | None = Query(default=None, alias="status"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    db: Session = Depends(get_db),
+    _: UserRole = Depends(require_roles(UserRole.ADMIN)),
+):
+    query = db.query(MediaAsset)
+    if status_filter is not None:
+        query = query.filter(MediaAsset.status == status_filter)
+
+    count = query.count()
+    offset = (page - 1) * page_size
+    data = (
+        query.order_by(MediaAsset.created_at.desc(), MediaAsset.id.desc())
+        .offset(offset)
+        .limit(page_size)
+        .all()
+    )
+    return MediaAssetsResponse(data=data, count=count, page=page, page_size=page_size)
 
 
 @router.put("/media/{asset_id}/upload", response_model=MediaAssetBase)

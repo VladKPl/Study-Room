@@ -163,6 +163,13 @@ class MediaStatusUpdate(BaseModel):
     status: MediaAssetStatus
 
 
+class MediaAssetsResponse(BaseModel):
+    data: List[MediaAssetBase]
+    count: int
+    page: int
+    page_size: int
+
+
 class CourseSectionWithBlocks(BaseModel):
     id: int
     course_id: int

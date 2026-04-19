@@ -560,6 +560,47 @@ def test_admin_can_update_media_asset_status(client, db_session):
     assert response.json()["status"] == MediaAssetStatus.REJECTED.value
 
 
+def test_admin_can_list_media_assets_with_status_filter(client, db_session):
+    author = _create_user(db_session, "media-list-author@example.com", UserRole.AUTHOR)
+    admin = _create_user(db_session, "media-list-admin@example.com", UserRole.ADMIN)
+
+    asset_pending = MediaAsset(
+        owner_id=author.id,
+        asset_type=MediaAssetType.FILE,
+        mime_type="application/pdf",
+        size_bytes=100,
+        storage_url="/uploads/a.pdf",
+        status=MediaAssetStatus.PENDING,
+    )
+    asset_ready = MediaAsset(
+        owner_id=author.id,
+        asset_type=MediaAssetType.FILE,
+        mime_type="application/pdf",
+        size_bytes=200,
+        storage_url="/uploads/b.pdf",
+        status=MediaAssetStatus.READY,
+    )
+    db_session.add_all([asset_pending, asset_ready])
+    db_session.commit()
+
+    response = client.get(
+        "/api/v1/media?status=pending&page=1&page_size=10",
+        headers=_auth_headers(admin),
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["count"] == 1
+    assert len(payload["data"]) == 1
+    assert payload["data"][0]["status"] == MediaAssetStatus.PENDING.value
+
+
+def test_non_admin_cannot_list_media_assets(client, db_session):
+    author = _create_user(db_session, "media-list-author2@example.com", UserRole.AUTHOR)
+    response = client.get("/api/v1/media", headers=_auth_headers(author))
+    assert response.status_code == 403
+
+
 def test_submit_link_and_admin_moderation_for_block(client, db_session):
     category = Category(name="LinkBlocks")
     db_session.add(category)
