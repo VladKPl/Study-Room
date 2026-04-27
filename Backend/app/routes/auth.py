@@ -1,23 +1,30 @@
+import logging
 import os
 import secrets
-from datetime import datetime, timezone
-from urllib.parse import urlencode
+from datetime import datetime, timedelta, timezone
+from hashlib import sha256
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response, status
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.models.password_reset_tokens import PasswordResetToken
 from app.models.refresh_tokens import RefreshToken
 from app.models.users import OAuthAccount, User, UserRole
 from app.schemas.auth import (
+    ForgotPasswordRequest,
+    ForgotPasswordResponse,
     LoginRequest,
     LogoutResponse,
     RefreshRequest,
     RegisterRequest,
-    TokenRotateResponse,
+    ResetPasswordRequest,
+    ResetPasswordResponse,
     TokenPairResponse,
+    TokenRotateResponse,
 )
 from app.security.auth import (
     create_access_token,
@@ -27,8 +34,10 @@ from app.security.auth import (
     verify_password,
 )
 from app.security.rbac import get_current_user
+from app.services.email import SMTPSettings, send_password_reset_email
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+logger = logging.getLogger(__name__)
 
 GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
@@ -38,6 +47,131 @@ GOOGLE_STATE_COOKIE = "oauth_google_state"
 
 def _normalize_email(email: str) -> str:
     return email.strip().lower()
+
+
+def _truthy_env(name: str, default: str = "false") -> bool:
+    return os.getenv(name, default).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _password_reset_ttl_minutes() -> int:
+    return int(os.getenv("PASSWORD_RESET_TOKEN_EXPIRE_MINUTES", "30"))
+
+
+def _frontend_google_success_redirect_url() -> str | None:
+    value = os.getenv("FRONTEND_GOOGLE_SUCCESS_REDIRECT_URL", "").strip()
+    return value or None
+
+
+def _frontend_google_error_redirect_url() -> str | None:
+    value = os.getenv("FRONTEND_GOOGLE_ERROR_REDIRECT_URL", "").strip()
+    return value or None
+
+
+def _frontend_password_reset_url() -> str | None:
+    value = os.getenv("FRONTEND_PASSWORD_RESET_URL", "").strip()
+    return value or None
+
+
+def _int_env(name: str, default: int) -> int:
+    raw = os.getenv(name, str(default)).strip()
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+def _float_env(name: str, default: float) -> float:
+    raw = os.getenv(name, str(default)).strip()
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
+def _smtp_settings() -> SMTPSettings | None:
+    host = os.getenv("SMTP_HOST", "").strip()
+    from_email = os.getenv("SMTP_FROM_EMAIL", "").strip()
+    if not host or not from_email:
+        return None
+
+    username = os.getenv("SMTP_USERNAME", "").strip() or None
+    password = os.getenv("SMTP_PASSWORD", "").strip() or None
+    from_name = os.getenv("SMTP_FROM_NAME", "").strip() or None
+
+    return SMTPSettings(
+        host=host,
+        port=_int_env("SMTP_PORT", 587),
+        username=username,
+        password=password,
+        from_email=from_email,
+        from_name=from_name,
+        starttls=_truthy_env("SMTP_STARTTLS", "true"),
+        use_ssl=_truthy_env("SMTP_USE_SSL", "false"),
+        timeout_seconds=_float_env("SMTP_TIMEOUT_SECONDS", 10.0),
+    )
+
+
+def _with_query_params(url: str, params: dict[str, str]) -> str:
+    split = urlsplit(url)
+    query = dict(parse_qsl(split.query, keep_blank_values=True))
+    query.update(params)
+    return urlunsplit((split.scheme, split.netloc, split.path, urlencode(query), split.fragment))
+
+
+def _with_fragment_params(url: str, params: dict[str, str]) -> str:
+    split = urlsplit(url)
+    fragment_query = urlencode(params)
+    return urlunsplit((split.scheme, split.netloc, split.path, split.query, fragment_query))
+
+
+def _hash_reset_token(raw_token: str) -> str:
+    return sha256(raw_token.encode("utf-8")).hexdigest()
+
+
+def _send_password_reset_email_task(to_email: str, reset_url: str) -> None:
+    settings = _smtp_settings()
+    if settings is None:
+        return
+    try:
+        send_password_reset_email(
+            to_email=to_email,
+            reset_url=reset_url,
+            settings=settings,
+        )
+    except Exception:
+        logger.exception("Password reset email failed for %s", to_email)
+
+
+def _google_error_redirect_response(error_code: str) -> RedirectResponse | None:
+    redirect_base = _frontend_google_error_redirect_url()
+    if not redirect_base:
+        return None
+    redirect_url = _with_query_params(redirect_base, {"error": error_code})
+    redirect_response = RedirectResponse(url=redirect_url, status_code=302)
+    redirect_response.delete_cookie(key=GOOGLE_STATE_COOKIE)
+    return redirect_response
+
+
+def _google_success_redirect_response(token_pair: TokenPairResponse) -> RedirectResponse | None:
+    redirect_base = _frontend_google_success_redirect_url()
+    if not redirect_base:
+        return None
+
+    redirect_url = _with_fragment_params(
+        redirect_base,
+        {
+            "access_token": token_pair.access_token,
+            "refresh_token": token_pair.refresh_token,
+            "token_type": token_pair.token_type,
+            "user_id": str(token_pair.user.id),
+            "email": str(token_pair.user.email),
+            "full_name": token_pair.user.full_name,
+            "role": token_pair.user.role.value,
+        },
+    )
+    redirect_response = RedirectResponse(url=redirect_url, status_code=302)
+    redirect_response.delete_cookie(key=GOOGLE_STATE_COOKIE)
+    return redirect_response
 
 
 def _require_authenticated_user(current_user: User | None = Depends(get_current_user)) -> User:
@@ -148,16 +282,26 @@ def google_callback(
 ):
     request_state = request.cookies.get(GOOGLE_STATE_COOKIE)
     if not request_state or state != request_state:
+        redirect_response = _google_error_redirect_response("invalid_oauth_state")
+        if redirect_response is not None:
+            return redirect_response
         raise HTTPException(status_code=400, detail="Invalid OAuth state")
 
-    client_id, client_secret, redirect_uri = _get_google_oauth_config()
-    token_payload = _exchange_google_code_for_token(
-        code=code,
-        client_id=client_id,
-        client_secret=client_secret,
-        redirect_uri=redirect_uri,
-    )
-    google_user = _fetch_google_userinfo(token_payload["access_token"])
+    try:
+        client_id, client_secret, redirect_uri = _get_google_oauth_config()
+        token_payload = _exchange_google_code_for_token(
+            code=code,
+            client_id=client_id,
+            client_secret=client_secret,
+            redirect_uri=redirect_uri,
+        )
+        google_user = _fetch_google_userinfo(token_payload["access_token"])
+    except HTTPException:
+        redirect_response = _google_error_redirect_response("google_oauth_failed")
+        if redirect_response is not None:
+            return redirect_response
+        raise
+
     provider = "google"
     provider_user_id = str(google_user["sub"])
     normalized_email = _normalize_email(google_user["email"])
@@ -195,12 +339,19 @@ def google_callback(
         )
 
     if not user.is_active:
+        redirect_response = _google_error_redirect_response("user_inactive")
+        if redirect_response is not None:
+            return redirect_response
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User is inactive")
 
     token_pair = _issue_token_pair(db, user)
     db.commit()
     db.refresh(user)
     response.delete_cookie(key=GOOGLE_STATE_COOKIE)
+
+    redirect_response = _google_success_redirect_response(token_pair)
+    if redirect_response is not None:
+        return redirect_response
     return token_pair
 
 
@@ -290,3 +441,88 @@ def logout(
     ).update({RefreshToken.revoked_at: now}, synchronize_session=False)
     db.commit()
     return LogoutResponse(message="Logged out", revoked_count=revoked_count)
+
+
+@router.post("/password/forgot", response_model=ForgotPasswordResponse)
+def forgot_password(
+    payload: ForgotPasswordRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    normalized_email = _normalize_email(payload.email)
+    generic_message = "If the account exists, password reset instructions were generated"
+    user = db.query(User).filter(User.email == normalized_email).first()
+
+    if not user or not user.is_active:
+        return ForgotPasswordResponse(message=generic_message)
+
+    now = datetime.now(timezone.utc)
+    db.query(PasswordResetToken).filter(
+        PasswordResetToken.user_id == user.id,
+        PasswordResetToken.used_at.is_(None),
+        PasswordResetToken.expires_at > now,
+    ).update({PasswordResetToken.used_at: now}, synchronize_session=False)
+
+    raw_token = secrets.token_urlsafe(48)
+    db.add(
+        PasswordResetToken(
+            user_id=user.id,
+            token_hash=_hash_reset_token(raw_token),
+            expires_at=now + timedelta(minutes=_password_reset_ttl_minutes()),
+        )
+    )
+    db.commit()
+
+    reset_url = None
+    frontend_reset_url = _frontend_password_reset_url()
+    if frontend_reset_url:
+        reset_url = _with_query_params(frontend_reset_url, {"token": raw_token})
+        background_tasks.add_task(
+            _send_password_reset_email_task,
+            to_email=user.email,
+            reset_url=reset_url,
+        )
+
+    if not _truthy_env("PASSWORD_RESET_DEBUG_RETURN_TOKEN"):
+        return ForgotPasswordResponse(message=generic_message)
+
+    return ForgotPasswordResponse(
+        message=generic_message,
+        reset_token=raw_token,
+        reset_url=reset_url,
+    )
+
+
+@router.post("/password/reset", response_model=ResetPasswordResponse)
+def reset_password(payload: ResetPasswordRequest, db: Session = Depends(get_db)):
+    now = datetime.now(timezone.utc)
+    token_hash = _hash_reset_token(payload.token)
+    token_row = db.query(PasswordResetToken).filter(
+        PasswordResetToken.token_hash == token_hash,
+        PasswordResetToken.used_at.is_(None),
+        PasswordResetToken.expires_at > now,
+    ).first()
+    if not token_row:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Password reset token is invalid or expired",
+        )
+
+    user = db.query(User).filter(User.id == token_row.user_id).first()
+    if not user or not user.is_active:
+        token_row.used_at = now
+        db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Password reset token is invalid or expired",
+        )
+
+    user.password_hash = hash_password(payload.new_password)
+    token_row.used_at = now
+    db.query(PasswordResetToken).filter(
+        PasswordResetToken.user_id == user.id,
+        PasswordResetToken.used_at.is_(None),
+        PasswordResetToken.id != token_row.id,
+    ).update({PasswordResetToken.used_at: now}, synchronize_session=False)
+    db.commit()
+    return ResetPasswordResponse(message="Password has been reset successfully")

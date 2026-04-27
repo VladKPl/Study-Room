@@ -13,6 +13,7 @@ from app.models.courses import (
     MediaAssetStatus,
     MediaAssetType,
 )
+from app.models.password_reset_tokens import PasswordResetToken
 from app.models.refresh_tokens import RefreshToken
 from app.models.users import OAuthAccount, User, UserRole
 
@@ -31,6 +32,7 @@ __all__ = [
     "MediaAssetStatus",
     "MediaAssetType",
     "OAuthAccount",
+    "PasswordResetToken",
     "RefreshToken",
     "User",
     "UserRole",
