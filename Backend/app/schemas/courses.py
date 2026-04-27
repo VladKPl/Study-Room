@@ -1,6 +1,7 @@
-from typing import List, Optional
+from typing import Any, List, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+from app.editorjs import parse_editorjs_payload_for_response
 
 from app.models.courses import (
     BlockContentType,
@@ -17,7 +18,7 @@ class LessonBase(BaseModel):
     id: int
     title: str
     content_type: LessonContentType
-    content: Optional[str] = None
+    content: Optional[str | dict[str, Any]] = None
     video_url: Optional[str] = None
     attachment_url: Optional[str] = None
     external_url: Optional[str] = None
@@ -25,11 +26,16 @@ class LessonBase(BaseModel):
     position: int
     model_config = ConfigDict(from_attributes=True)
 
+    @field_validator("content", mode="before")
+    @classmethod
+    def _parse_editor_content(cls, value: Any) -> Any:
+        return parse_editorjs_payload_for_response(value)
+
 
 class LessonCreate(BaseModel):
     title: str
     content_type: LessonContentType = LessonContentType.TEXT
-    content: Optional[str] = None
+    content: Optional[str | dict[str, Any]] = None
     video_url: Optional[str] = None
     attachment_url: Optional[str] = None
     external_url: Optional[str] = None
@@ -39,7 +45,7 @@ class LessonCreate(BaseModel):
 class LessonUpdate(BaseModel):
     title: Optional[str] = None
     content_type: Optional[LessonContentType] = None
-    content: Optional[str] = None
+    content: Optional[str | dict[str, Any]] = None
     video_url: Optional[str] = None
     attachment_url: Optional[str] = None
     external_url: Optional[str] = None
@@ -101,18 +107,23 @@ class CourseBlockBase(BaseModel):
     section_id: int
     content_type: BlockContentType
     position: int
-    text_content: Optional[str] = None
+    text_content: Optional[str | dict[str, Any]] = None
     video_url: Optional[str] = None
     file_asset_id: Optional[int] = None
     external_url: Optional[str] = None
     moderation_status: BlockModerationStatus
     model_config = ConfigDict(from_attributes=True)
 
+    @field_validator("text_content", mode="before")
+    @classmethod
+    def _parse_editor_text_content(cls, value: Any) -> Any:
+        return parse_editorjs_payload_for_response(value)
+
 
 class CourseBlockCreate(BaseModel):
     content_type: BlockContentType = BlockContentType.TEXT
     position: Optional[int] = Field(default=None, ge=1)
-    text_content: Optional[str] = None
+    text_content: Optional[str | dict[str, Any]] = None
     video_url: Optional[str] = None
     file_asset_id: Optional[int] = Field(default=None, ge=1)
     external_url: Optional[str] = None
@@ -121,7 +132,7 @@ class CourseBlockCreate(BaseModel):
 class CourseBlockUpdate(BaseModel):
     content_type: Optional[BlockContentType] = None
     position: Optional[int] = Field(default=None, ge=1)
-    text_content: Optional[str] = None
+    text_content: Optional[str | dict[str, Any]] = None
     video_url: Optional[str] = None
     file_asset_id: Optional[int] = Field(default=None, ge=1)
     external_url: Optional[str] = None

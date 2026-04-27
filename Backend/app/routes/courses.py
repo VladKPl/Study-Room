@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from app.database import get_db
+from app.editorjs import normalize_editorjs_payload_for_storage
 from app.models.courses import (
     BlockContentType,
     BlockModerationStatus,
@@ -410,7 +411,7 @@ def create_course_block(
         section_id=section.id,
         content_type=payload.content_type,
         position=payload.position or _next_block_position(db, section.id),
-        text_content=payload.text_content,
+        text_content=normalize_editorjs_payload_for_storage("text_content", payload.text_content),
         video_url=payload.video_url,
         file_asset_id=payload.file_asset_id,
         external_url=payload.external_url,
@@ -438,6 +439,8 @@ def update_course_block(
     updates = payload.model_dump(exclude_unset=True)
     if "file_asset_id" in updates and updates["file_asset_id"] is not None:
         _get_owned_media_asset_or_404(db, updates["file_asset_id"], role, user_id)
+    if "text_content" in updates:
+        updates["text_content"] = normalize_editorjs_payload_for_storage("text_content", updates["text_content"])
 
     for field, value in updates.items():
         setattr(block, field, value)
@@ -619,7 +622,7 @@ def create_lesson(
         course_id=course_id,
         title=payload.title,
         content_type=payload.content_type,
-        content=payload.content,
+        content=normalize_editorjs_payload_for_storage("content", payload.content),
         video_url=payload.video_url,
         attachment_url=payload.attachment_url,
         external_url=payload.external_url,
@@ -645,6 +648,8 @@ def update_lesson(
     user_id = _require_user_id_for_author(role, user_id)
     lesson = _get_owner_mutable_lesson_or_404(db, course_id, lesson_id, role, user_id)
     updates = payload.model_dump(exclude_unset=True)
+    if "content" in updates:
+        updates["content"] = normalize_editorjs_payload_for_storage("content", updates["content"])
     for field, value in updates.items():
         setattr(lesson, field, value)
     _apply_lesson_content_rules(lesson)

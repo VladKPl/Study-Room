@@ -1,3 +1,5 @@
+from typing import cast
+
 from app.models import (
     BlockContentType,
     BlockModerationStatus,
@@ -27,7 +29,7 @@ def _create_user(db_session, email: str, role: UserRole) -> User:
 
 
 def _auth_headers(user: User) -> dict[str, str]:
-    token = create_access_token(user.id, user.role)
+    token = create_access_token(cast(int, user.id), cast(UserRole, user.role))
     return {"Authorization": f"Bearer {token}"}
 
 
@@ -737,3 +739,140 @@ def test_author_can_fetch_editor_sections_with_blocks(client, db_session):
     assert payload["sections"][0]["title"] == "Section 1"
     assert len(payload["sections"][0]["blocks"]) == 2
     assert payload["sections"][0]["blocks"][0]["content_type"] == "text"
+
+
+def test_editorjs_payload_is_accepted_for_lesson_content(client, db_session):
+    category = Category(name="EditorJsLessons")
+    db_session.add(category)
+    db_session.commit()
+    db_session.refresh(category)
+
+    author = _create_user(db_session, "editorjs-lesson-author@example.com", UserRole.AUTHOR)
+    course = Course(
+        title="EditorJs Lesson Course",
+        description="editorjs",
+        price=120,
+        category_id=category.id,
+        status=CourseStatus.DRAFT,
+        is_deleted=False,
+        author_id=author.id,
+    )
+    db_session.add(course)
+    db_session.commit()
+    db_session.refresh(course)
+
+    editor_payload = {
+        "time": 1713971000,
+        "blocks": [
+            {
+                "type": "paragraph",
+                "data": {"text": "Editor.js block content"},
+            }
+        ],
+        "version": "2.30.0",
+    }
+
+    response = client.post(
+        f"/api/v1/courses/{course.id}/lessons",
+        headers=_auth_headers(author),
+        json={
+            "title": "Lesson with Editor.js",
+            "content_type": "text",
+            "content": editor_payload,
+        },
+    )
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["content"]["blocks"][0]["type"] == "paragraph"
+    assert payload["content"]["blocks"][0]["data"]["text"] == "Editor.js block content"
+
+
+def test_editorjs_payload_rejects_unsafe_url_in_lesson_content(client, db_session):
+    category = Category(name="EditorJsUnsafe")
+    db_session.add(category)
+    db_session.commit()
+    db_session.refresh(category)
+
+    author = _create_user(db_session, "editorjs-unsafe-author@example.com", UserRole.AUTHOR)
+    course = Course(
+        title="Unsafe EditorJs Course",
+        description="editorjs unsafe",
+        price=99,
+        category_id=category.id,
+        status=CourseStatus.DRAFT,
+        is_deleted=False,
+        author_id=author.id,
+    )
+    db_session.add(course)
+    db_session.commit()
+    db_session.refresh(course)
+
+    response = client.post(
+        f"/api/v1/courses/{course.id}/lessons",
+        headers=_auth_headers(author),
+        json={
+            "title": "Unsafe lesson",
+            "content_type": "text",
+            "content": {
+                "time": 1713971000,
+                "blocks": [
+                    {
+                        "type": "paragraph",
+                        "data": {"url": "javascript:alert(1)"},
+                    }
+                ],
+                "version": "2.30.0",
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    assert "must use http or https URL" in response.json()["detail"]
+
+
+def test_editorjs_payload_is_accepted_for_block_text_content(client, db_session):
+    category = Category(name="EditorJsBlocks")
+    db_session.add(category)
+    db_session.commit()
+    db_session.refresh(category)
+
+    author = _create_user(db_session, "editorjs-block-author@example.com", UserRole.AUTHOR)
+    course = Course(
+        title="EditorJs Block Course",
+        description="editorjs block",
+        price=70,
+        category_id=category.id,
+        status=CourseStatus.DRAFT,
+        is_deleted=False,
+        author_id=author.id,
+    )
+    db_session.add(course)
+    db_session.flush()
+    section = CourseSection(course_id=course.id, title="Editor section", position=1)
+    db_session.add(section)
+    db_session.commit()
+    db_session.refresh(section)
+
+    response = client.post(
+        f"/api/v1/sections/{section.id}/blocks",
+        headers=_auth_headers(author),
+        json={
+            "content_type": "text",
+            "text_content": {
+                "time": 1713971000,
+                "blocks": [
+                    {
+                        "type": "paragraph",
+                        "data": {"text": "Block Editor.js data"},
+                    }
+                ],
+                "version": "2.30.0",
+            },
+        },
+    )
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["text_content"]["blocks"][0]["type"] == "paragraph"
+    assert payload["text_content"]["blocks"][0]["data"]["text"] == "Block Editor.js data"
