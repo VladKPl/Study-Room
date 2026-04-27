@@ -35,6 +35,9 @@
 - Для операций `author` проверяется владение курсом (`course.author_id == current_user.id`).
 - Роль `student` назначается по умолчанию при регистрации.
 - Поддерживается вход через Google OAuth (`/api/v1/auth/google/login`, `/api/v1/auth/google/callback`).
+- Refresh-токены хранятся в БД (`refresh_tokens`) и могут быть отозваны.
+- `/api/v1/auth/refresh` реализует rotation refresh-токена (старый становится revoked).
+- `/api/v1/auth/logout` отзывает все активные refresh-токены пользователя.
 
 ## Запланировано
 
