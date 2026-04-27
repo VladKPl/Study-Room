@@ -154,3 +154,129 @@ def test_google_callback_rejects_invalid_state(client, monkeypatch):
     response = client.get("/api/v1/auth/google/callback?code=test-code&state=bad-state")
 
     assert response.status_code == 400
+
+
+def test_google_callback_redirects_to_frontend_when_configured(client, monkeypatch):
+    _set_google_env(monkeypatch)
+    monkeypatch.setenv("FRONTEND_GOOGLE_SUCCESS_REDIRECT_URL", "http://frontend.local/auth/google/callback")
+
+    login_response = client.get("/api/v1/auth/google/login", follow_redirects=False)
+    state = parse_qs(urlparse(login_response.headers["location"]).query)["state"][0]
+
+    monkeypatch.setattr(
+        auth_routes,
+        "_exchange_google_code_for_token",
+        lambda **kwargs: {"access_token": "google-access-token"},
+    )
+    monkeypatch.setattr(
+        auth_routes,
+        "_fetch_google_userinfo",
+        lambda access_token: {
+            "sub": "google-user-redirect",
+            "email": "redirect-user@example.com",
+            "name": "Redirect User",
+            "email_verified": True,
+        },
+    )
+
+    response = client.get(
+        f"/api/v1/auth/google/callback?code=test-code&state={state}",
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 302
+    location = response.headers["location"]
+    parsed = urlparse(location)
+    fragment = parse_qs(parsed.fragment)
+    assert parsed.netloc == "frontend.local"
+    assert fragment["access_token"][0]
+    assert fragment["refresh_token"][0]
+    assert fragment["email"][0] == "redirect-user@example.com"
+    assert fragment["role"][0] == UserRole.STUDENT.value
+
+
+def test_forgot_password_returns_generic_message_for_unknown_email(client, monkeypatch):
+    monkeypatch.setenv("PASSWORD_RESET_DEBUG_RETURN_TOKEN", "true")
+
+    response = client.post(
+        "/api/v1/auth/password/forgot",
+        json={"email": "unknown-user@example.com"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert "If the account exists" in payload["message"]
+    assert payload["reset_token"] is None
+
+
+def test_forgot_and_reset_password_flow_with_debug_token(client, db_session, monkeypatch):
+    monkeypatch.setenv("PASSWORD_RESET_DEBUG_RETURN_TOKEN", "true")
+    monkeypatch.setenv("FRONTEND_PASSWORD_RESET_URL", "http://frontend.local/auth/reset-password")
+
+    user = User(
+        email="reset-me@example.com",
+        full_name="Reset Me",
+        password_hash=hash_password("OldPass123"),
+        role=UserRole.STUDENT,
+    )
+    db_session.add(user)
+    db_session.commit()
+
+    forgot_response = client.post(
+        "/api/v1/auth/password/forgot",
+        json={"email": "reset-me@example.com"},
+    )
+    assert forgot_response.status_code == 200
+    forgot_payload = forgot_response.json()
+    assert forgot_payload["reset_token"]
+    assert "token=" in forgot_payload["reset_url"]
+
+    reset_response = client.post(
+        "/api/v1/auth/password/reset",
+        json={"token": forgot_payload["reset_token"], "new_password": "NewPass123"},
+    )
+    assert reset_response.status_code == 200
+    assert "successfully" in reset_response.json()["message"]
+
+    old_login = client.post(
+        "/api/v1/auth/login",
+        json={"email": "reset-me@example.com", "password": "OldPass123"},
+    )
+    assert old_login.status_code == 401
+
+    new_login = client.post(
+        "/api/v1/auth/login",
+        json={"email": "reset-me@example.com", "password": "NewPass123"},
+    )
+    assert new_login.status_code == 200
+
+
+def test_password_reset_token_cannot_be_reused(client, db_session, monkeypatch):
+    monkeypatch.setenv("PASSWORD_RESET_DEBUG_RETURN_TOKEN", "true")
+
+    user = User(
+        email="reuse-token@example.com",
+        full_name="Reuse Token",
+        password_hash=hash_password("InitialPass123"),
+        role=UserRole.STUDENT,
+    )
+    db_session.add(user)
+    db_session.commit()
+
+    forgot_response = client.post(
+        "/api/v1/auth/password/forgot",
+        json={"email": "reuse-token@example.com"},
+    )
+    token = forgot_response.json()["reset_token"]
+
+    first_reset = client.post(
+        "/api/v1/auth/password/reset",
+        json={"token": token, "new_password": "FirstReset123"},
+    )
+    assert first_reset.status_code == 200
+
+    second_reset = client.post(
+        "/api/v1/auth/password/reset",
+        json={"token": token, "new_password": "SecondReset123"},
+    )
+    assert second_reset.status_code == 400
