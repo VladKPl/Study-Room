@@ -1,0 +1,16 @@
+@font-face {
+  font-family: "Rubik";
+  src: url("./assets/Fonts/MyFont/Rubik-VariableFont_wght.ttf") format("truetype");
+  font-style: normal;
+  font-weight: 300 900;
+}
+
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: Arial, sans-serif;
+}
