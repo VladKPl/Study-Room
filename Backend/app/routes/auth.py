@@ -1,3 +1,4 @@
+import logging
 import os
 import secrets
 from datetime import datetime, timedelta, timezone
@@ -5,7 +6,7 @@ from hashlib import sha256
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response, status
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
@@ -31,8 +32,10 @@ from app.security.auth import (
     parse_subject_user_id,
     verify_password,
 )
+from app.services.email import SMTPSettings, send_password_reset_email
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+logger = logging.getLogger(__name__)
 
 GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
@@ -67,6 +70,45 @@ def _frontend_password_reset_url() -> str | None:
     return value or None
 
 
+def _int_env(name: str, default: int) -> int:
+    raw = os.getenv(name, str(default)).strip()
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+def _float_env(name: str, default: float) -> float:
+    raw = os.getenv(name, str(default)).strip()
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
+def _smtp_settings() -> SMTPSettings | None:
+    host = os.getenv("SMTP_HOST", "").strip()
+    from_email = os.getenv("SMTP_FROM_EMAIL", "").strip()
+    if not host or not from_email:
+        return None
+
+    username = os.getenv("SMTP_USERNAME", "").strip() or None
+    password = os.getenv("SMTP_PASSWORD", "").strip() or None
+    from_name = os.getenv("SMTP_FROM_NAME", "").strip() or None
+
+    return SMTPSettings(
+        host=host,
+        port=_int_env("SMTP_PORT", 587),
+        username=username,
+        password=password,
+        from_email=from_email,
+        from_name=from_name,
+        starttls=_truthy_env("SMTP_STARTTLS", "true"),
+        use_ssl=_truthy_env("SMTP_USE_SSL", "false"),
+        timeout_seconds=_float_env("SMTP_TIMEOUT_SECONDS", 10.0),
+    )
+
+
 def _with_query_params(url: str, params: dict[str, str]) -> str:
     split = urlsplit(url)
     query = dict(parse_qsl(split.query, keep_blank_values=True))
@@ -82,6 +124,20 @@ def _with_fragment_params(url: str, params: dict[str, str]) -> str:
 
 def _hash_reset_token(raw_token: str) -> str:
     return sha256(raw_token.encode("utf-8")).hexdigest()
+
+
+def _send_password_reset_email_task(to_email: str, reset_url: str) -> None:
+    settings = _smtp_settings()
+    if settings is None:
+        return
+    try:
+        send_password_reset_email(
+            to_email=to_email,
+            reset_url=reset_url,
+            settings=settings,
+        )
+    except Exception:
+        logger.exception("Password reset email failed for %s", to_email)
 
 
 def _google_error_redirect_response(error_code: str) -> RedirectResponse | None:
@@ -339,7 +395,11 @@ def refresh_tokens(payload: RefreshRequest, db: Session = Depends(get_db)):
 
 
 @router.post("/password/forgot", response_model=ForgotPasswordResponse)
-def forgot_password(payload: ForgotPasswordRequest, db: Session = Depends(get_db)):
+def forgot_password(
+    payload: ForgotPasswordRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
     normalized_email = _normalize_email(payload.email)
     generic_message = "If the account exists, password reset instructions were generated"
     user = db.query(User).filter(User.email == normalized_email).first()
@@ -364,13 +424,18 @@ def forgot_password(payload: ForgotPasswordRequest, db: Session = Depends(get_db
     )
     db.commit()
 
-    if not _truthy_env("PASSWORD_RESET_DEBUG_RETURN_TOKEN"):
-        return ForgotPasswordResponse(message=generic_message)
-
     reset_url = None
     frontend_reset_url = _frontend_password_reset_url()
     if frontend_reset_url:
         reset_url = _with_query_params(frontend_reset_url, {"token": raw_token})
+        background_tasks.add_task(
+            _send_password_reset_email_task,
+            to_email=user.email,
+            reset_url=reset_url,
+        )
+
+    if not _truthy_env("PASSWORD_RESET_DEBUG_RETURN_TOKEN"):
+        return ForgotPasswordResponse(message=generic_message)
 
     return ForgotPasswordResponse(
         message=generic_message,

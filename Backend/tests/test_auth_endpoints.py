@@ -209,6 +209,44 @@ def test_forgot_password_returns_generic_message_for_unknown_email(client, monke
     assert payload["reset_token"] is None
 
 
+def test_forgot_password_sends_email_when_smtp_is_configured(client, db_session, monkeypatch):
+    monkeypatch.setenv("FRONTEND_PASSWORD_RESET_URL", "http://frontend.local/auth/reset-password")
+    monkeypatch.setenv("SMTP_HOST", "smtp.example.test")
+    monkeypatch.setenv("SMTP_PORT", "587")
+    monkeypatch.setenv("SMTP_FROM_EMAIL", "noreply@example.com")
+    monkeypatch.setenv("SMTP_STARTTLS", "false")
+
+    captured = {}
+
+    def _fake_send_password_reset_email(*, to_email, reset_url, settings):
+        captured["to_email"] = to_email
+        captured["reset_url"] = reset_url
+        captured["host"] = settings.host
+
+    monkeypatch.setattr(auth_routes, "send_password_reset_email", _fake_send_password_reset_email)
+
+    user = User(
+        email="mailer@example.com",
+        full_name="Mailer User",
+        password_hash=hash_password("OldPass123"),
+        role=UserRole.STUDENT,
+    )
+    db_session.add(user)
+    db_session.commit()
+
+    response = client.post(
+        "/api/v1/auth/password/forgot",
+        json={"email": "mailer@example.com"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["reset_token"] is None
+    assert captured["to_email"] == "mailer@example.com"
+    assert captured["host"] == "smtp.example.test"
+    assert "token=" in captured["reset_url"]
+
+
 def test_forgot_and_reset_password_flow_with_debug_token(client, db_session, monkeypatch):
     monkeypatch.setenv("PASSWORD_RESET_DEBUG_RETURN_TOKEN", "true")
     monkeypatch.setenv("FRONTEND_PASSWORD_RESET_URL", "http://frontend.local/auth/reset-password")
