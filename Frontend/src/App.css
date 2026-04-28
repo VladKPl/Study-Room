@@ -80,7 +80,7 @@
 }
 
 .nav-item:hover .nav-button {
-  color: rgba(71, 40, 255, 0.6);
+  color: rgba(122, 93, 255, 1);
 }
 
 
@@ -118,7 +118,7 @@
 }
 
 .dropdown__item:hover {
-  background: rgba(71, 40, 255, 0.5);
+  background: rgba(122, 93, 255, 0.4);
   color: #000000;
 }
 
@@ -128,13 +128,60 @@
   gap: 12px;
 }
 
+.user-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.user-name {
+  color: #ffffff;
+  font-family: "Rubik", sans-serif;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.logout-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.06);
+  color: #d7d9e4;
+  cursor: pointer;
+  transition:
+    background-color 0.2s ease,
+    color 0.2s ease,
+    border-color 0.2s ease,
+    transform 0.2s ease;
+}
+
+.logout-button:hover {
+  background: rgba(122, 93, 255, 0.16);
+  color: #8f72ff;
+  border-color: rgba(143, 114, 255, 0.45);
+  transform: translateY(-1px);
+}
+
+.logout-button__icon {
+  width: 18px;
+  height: 18px;
+}
+
+
+
 .search-box {
   width: 280px;
 }
 
 .search-input {
-  width: 100%;
-  height: 44px;
+  width: 90%;
+  height: 38px;
   padding: 0 16px;
   border: 1px solid rgba(84, 55, 27, 0.12);
   border-radius: 999px;
@@ -144,14 +191,14 @@
 }
 
 .search-input:focus {
-  border-color: #4728ff;
+  border-color: rgba(122, 93, 255, 1);
 }
 
 .login-button {
   border: none;
   border-radius: 999px;
   padding: 12px 22px;
-  background: rgba(71, 40, 255, 0.7);
+  background: rgba(122, 93, 255, 1);
   color: #ffffff;
   font-family: "Rubik", sans-serif;
   font-size: 15px;
@@ -250,145 +297,6 @@
   transform: translateY(-2px);
   box-shadow: 0 16px 34px rgba(122, 93, 255, 0.28);
   background: #6d4fff;
-}
-
-/* Регистрация и авторизация*/
-
-.modal-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 2000;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 20px;
-  background: rgba(10, 10, 14, 0.7);
-}
-
-.auth-modal {
-  position: relative;
-  width: 100%;
-  max-width: 460px;
-  padding: 32px;
-  border-radius: 24px;
-  background: #191922;
-  box-shadow: 0 22px 60px rgba(0, 0, 0, 0.35);
-  border: 1px solid rgba(255, 255, 255, 0.06);
-}
-
-.modal-close {
-  position: absolute;
-  top: 14px;
-  right: 14px;
-  border: none;
-  background: transparent;
-  font-size: 28px;
-  line-height: 1;
-  cursor: pointer;
-  color: #ffffff;
-}
-
-.auth-modal__title {
-  margin: 0 0 12px;
-  font-size: 30px;
-  color: #ffffff;
-}
-
-.auth-modal__text {
-  margin: 0 0 22px;
-  color: #b7bac8;
-  line-height: 1.5;
-}
-
-.auth-tabs {
-  display: flex;
-  gap: 8px;
-  margin-bottom: 24px;
-}
-
-.auth-tab {
-  border: none;
-  background: transparent;
-  color: #aeb3c2;
-  font-family: "Rubik", sans-serif;
-  font-size: 15px;
-  cursor: pointer;
-  padding: 10px 14px;
-  border-radius: 999px;
-  transition:
-    background-color 0.2s ease,
-    color 0.2s ease;
-}
-
-.auth-tab--active {
-  background: rgba(122, 93, 255, 0.14);
-  color: #ffffff;
-}
-
-.auth-form {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
-
-.auth-form__field {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.auth-form__field span {
-  font-size: 14px;
-  color: #d5d8e3;
-}
-
-.auth-form__field input {
-  width: 100%;
-  height: 46px;
-  padding: 0 14px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 14px;
-  background: rgba(255, 255, 255, 0.04);
-  color: #ffffff;
-  outline: none;
-}
-
-.auth-form__field input:focus {
-  border-color: #7a5dff;
-}
-
-.auth-submit-button {
-  margin-top: 6px;
-  border: none;
-  border-radius: 14px;
-  padding: 14px 18px;
-  background: #7a5dff;
-  color: #ffffff;
-  font-family: "Rubik", sans-serif;
-  font-size: 15px;
-  font-weight: 700;
-  cursor: pointer;
-}
-
-.auth-divider {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  margin: 18px 0 14px;
-  color: #8f95a8;
-  font-size: 14px;
-}
-
-.google-auth-button {
-  width: 100%;
-  border: none;
-  border-radius: 14px;
-  padding: 14px 18px;
-  background: rgba(255, 255, 255, 0.08);
-  color: #ffffff;
-  font-family: "Rubik", sans-serif;
-  font-size: 15px;
-  cursor: pointer;
 }
 
 
