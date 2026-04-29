@@ -69,3 +69,8 @@ class TokenRotateResponse(BaseModel):
 class LogoutResponse(BaseModel):
     message: str
     revoked_count: int
+
+
+class BecomeAuthorResponse(BaseModel):
+    message: str
+    user: AuthUserResponse
