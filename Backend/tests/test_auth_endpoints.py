@@ -127,10 +127,62 @@ def test_logout_revokes_user_refresh_tokens(client):
     assert refresh_response.status_code == 401
 
 
+def test_become_author_requires_authentication(client):
+    response = client.post("/api/v1/auth/become-author")
+    assert response.status_code == 401
+
+
+def test_student_can_become_author(client, db_session):
+    register_response = client.post(
+        "/api/v1/auth/register",
+        json={"email": "student-to-author@example.com", "password": "StrongPass123"},
+    )
+    assert register_response.status_code == 201
+    token = register_response.json()["access_token"]
+
+    response = client.post(
+        "/api/v1/auth/become-author",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["user"]["role"] == UserRole.AUTHOR.value
+
+    user = db_session.query(User).filter(User.email == "student-to-author@example.com").first()
+    assert user is not None
+    assert user.role == UserRole.AUTHOR
+
+
+def test_admin_cannot_become_author(client, db_session):
+    admin_user = User(
+        email="admin-role-test@example.com",
+        full_name="Admin Test",
+        password_hash=hash_password("StrongPass123"),
+        role=UserRole.ADMIN,
+    )
+    db_session.add(admin_user)
+    db_session.commit()
+
+    login_response = client.post(
+        "/api/v1/auth/login",
+        json={"email": "admin-role-test@example.com", "password": "StrongPass123"},
+    )
+    assert login_response.status_code == 200
+    token = login_response.json()["access_token"]
+
+    response = client.post(
+        "/api/v1/auth/become-author",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 403
+
+
 def _set_google_env(monkeypatch):
     monkeypatch.setenv("GOOGLE_CLIENT_ID", "google-client-id")
     monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "google-client-secret")
     monkeypatch.setenv("GOOGLE_REDIRECT_URI", "http://testserver/api/v1/auth/google/callback")
+    monkeypatch.delenv("FRONTEND_GOOGLE_SUCCESS_REDIRECT_URL", raising=False)
+    monkeypatch.delenv("FRONTEND_GOOGLE_ERROR_REDIRECT_URL", raising=False)
 
 
 def test_google_login_redirects_to_google(client, monkeypatch):
@@ -195,6 +247,32 @@ def test_google_callback_rejects_invalid_state(client, monkeypatch):
 
     response = client.get("/api/v1/auth/google/callback?code=test-code&state=bad-state")
 
+    assert response.status_code == 400
+
+
+def test_google_callback_cancelled_by_user_redirects_to_frontend_error(client, monkeypatch):
+    _set_google_env(monkeypatch)
+    monkeypatch.setenv("FRONTEND_GOOGLE_ERROR_REDIRECT_URL", "http://frontend.local/auth/login")
+
+    login_response = client.get("/api/v1/auth/google/login", follow_redirects=False)
+    state = parse_qs(urlparse(login_response.headers["location"]).query)["state"][0]
+
+    response = client.get(
+        f"/api/v1/auth/google/callback?error=access_denied&state={state}",
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 302
+    location = response.headers["location"]
+    parsed = urlparse(location)
+    query = parse_qs(parsed.query)
+    assert parsed.netloc == "frontend.local"
+    assert query["error"][0] == "google_oauth_cancelled"
+
+
+def test_google_callback_missing_code_returns_400_not_422(client, monkeypatch):
+    _set_google_env(monkeypatch)
+    response = client.get("/api/v1/auth/google/callback?state=test-state")
     assert response.status_code == 400
 
 

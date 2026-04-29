@@ -15,6 +15,7 @@ from app.models.password_reset_tokens import PasswordResetToken
 from app.models.refresh_tokens import RefreshToken
 from app.models.users import OAuthAccount, User, UserRole
 from app.schemas.auth import (
+    BecomeAuthorResponse,
     ForgotPasswordRequest,
     ForgotPasswordResponse,
     LoginRequest,
@@ -274,14 +275,29 @@ def google_login():
 
 @router.get("/google/callback", response_model=TokenPairResponse)
 def google_callback(
-    code: str,
-    state: str,
     request: Request,
     response: Response,
+    code: str | None = None,
+    state: str | None = None,
+    error: str | None = None,
     db: Session = Depends(get_db),
 ):
+    if error:
+        error_code = "google_oauth_cancelled" if error == "access_denied" else "google_oauth_failed"
+        redirect_response = _google_error_redirect_response(error_code)
+        if redirect_response is not None:
+            return redirect_response
+        detail = "Google OAuth was cancelled by user" if error == "access_denied" else "Google OAuth failed"
+        raise HTTPException(status_code=400, detail=detail)
+
+    if not code:
+        redirect_response = _google_error_redirect_response("google_oauth_missing_code")
+        if redirect_response is not None:
+            return redirect_response
+        raise HTTPException(status_code=400, detail="Google OAuth callback is missing authorization code")
+
     request_state = request.cookies.get(GOOGLE_STATE_COOKIE)
-    if not request_state or state != request_state:
+    if not request_state or not state or state != request_state:
         redirect_response = _google_error_redirect_response("invalid_oauth_state")
         if redirect_response is not None:
             return redirect_response
@@ -441,6 +457,38 @@ def logout(
     ).update({RefreshToken.revoked_at: now}, synchronize_session=False)
     db.commit()
     return LogoutResponse(message="Logged out", revoked_count=revoked_count)
+
+
+@router.post("/become-author", response_model=BecomeAuthorResponse)
+def become_author(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(_require_authenticated_user),
+):
+    if current_user.role == UserRole.ADMIN:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admins cannot change role via this endpoint",
+        )
+
+    if current_user.role == UserRole.AUTHOR:
+        return BecomeAuthorResponse(
+            message="User is already an author",
+            user=current_user,
+        )
+
+    if current_user.role != UserRole.STUDENT:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only students can become authors",
+        )
+
+    current_user.role = UserRole.AUTHOR
+    db.commit()
+    db.refresh(current_user)
+    return BecomeAuthorResponse(
+        message="User role updated to author",
+        user=current_user,
+    )
 
 
 @router.post("/password/forgot", response_model=ForgotPasswordResponse)
